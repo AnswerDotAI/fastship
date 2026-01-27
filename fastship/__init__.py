@@ -8,5 +8,6 @@ Provides three CLI tools:
 
 See README.md for setup.
 """
+__version__ = "0.0.2"
 
-__version__ = "0.0.1"
+
