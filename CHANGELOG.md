@@ -2,7 +2,15 @@
 
 <!-- do not remove -->
 
+## 0.0.3
+
+### New Features
+
+- `ship_release_gh`: only include issue/PR titles in changelog ([#3](https://github.com/AnswerDotAI/fastship/pull/3)), thanks to [@jph00](https://github.com/jph00)
+
+
 ## 0.0.2
+
 ### New Features
 
 - Add `ship_pr` command for quick PR workflow ([#1](https://github.com/AnswerDotAI/fastship/pull/1)), thanks to [@jph00](https://github.com/jph00)
