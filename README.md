@@ -60,6 +60,26 @@ Quiet mode:
 ship_pypi --quiet
 ```
 
+### `ship_pr`
+
+Create a PR from uncommitted or unpushed work, merge it immediately, and clean up:
+
+```bash
+ship_pr "Add new feature"
+ship_pr "Fix bug" --label bug
+ship_pr "Breaking change" --label breaking
+```
+
+This command:
+1. Creates a new branch from your current work
+2. Commits any uncommitted changes (using the title as commit message)
+3. Pushes to origin and creates a PR
+4. Adds the specified label (default: `enhancement`)
+5. Squash-merges the PR
+6. Deletes the remote branch and resets local to updated main
+
+You must be on the default branch (usually `main`) with no unpulled changes.
+
 ### `ship_release_gh`
 
 This is an interactive helper:
