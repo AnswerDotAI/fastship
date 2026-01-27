@@ -530,7 +530,6 @@ def ship_new(
 
     print(f"Created {root}")
     print(f"Next:\n  cd {root}")
-    print("  python -m venv .venv && . .venv/bin/activate")
     print("  pip install -e .[dev]")
     return root
 
