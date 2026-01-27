@@ -26,6 +26,7 @@ classifiers = [
 ]
 dependencies = [
   "fastcore>=1.5.29",
+  "fastgit>=0.0.2",
   "ghapi>=1.0.5",
   "packaging>=23.0",
   "build>=1.0.0",
@@ -45,6 +46,7 @@ ship_bump = "fastship.release:ship_bump_cli"
 ship_pypi = "fastship.release:ship_pypi_cli"
 ship_release_gh = "fastship.release:ship_release_gh_cli"
 ship_new = "fastship.release:ship_new_cli"
+ship_pr = "fastship.release:ship_pr_cli"
 
 [tool.setuptools]
 include-package-data = true

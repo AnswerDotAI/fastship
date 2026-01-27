@@ -8,7 +8,8 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 from __future__ import annotations
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "get_config", "bump_version", "Release", "ship_bump",
-    "ship_bump_cli", "ship_pypi", "ship_pypi_cli", "ship_release_gh", "ship_release_gh_cli", "ship_new", "ship_new_cli"]
+    "ship_bump_cli", "ship_pypi", "ship_pypi_cli", "ship_release_gh", "ship_release_gh_cli", "ship_new", "ship_new_cli",
+    "ship_pr", "ship_pr_cli"]
 
 import os, re, sys, shutil, subprocess, ast, importlib.resources
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ except ImportError: import tomli as tomllib  # pragma: no cover
 from packaging.version import Version
 
 from fastcore.all import *  # Path, nested_idx, ifnone, parallel, run, repo_details, call_parse, ...
+from fastgit import Git
 from ghapi.core import *    # GhApi, HTTP404NotFoundError, ...
 
 GH_HOST = "https://api.github.com"
@@ -536,6 +538,88 @@ def ship_new(
 
 @call_parse
 @delegates(ship_new)
-def ship_new_cli(**kwargs):
+def ship_new_cli(
+    name: str,  # Project name (PyPI name), e.g. "my-project"
+    **kwargs
+):
     "Create a modern setuptools project wired for fastship."
-    ship_new(**kwargs)
+    ship_new(name, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Quick PR workflow
+# ---------------------------------------------------------------------------
+
+def ship_pr(
+    title: str,             # PR title (also used for commit message if needed)
+    branch: str = None,     # Branch name (auto-generated from title if not provided)
+    label: str = "enhancement",  # GitHub label for the PR
+    body: str = "",         # PR body text, or path to file containing body
+    token: str = None,      # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
+    repo: str = None,       # Override repo ("OWNER/REPO")
+):
+    "Create a PR from uncommitted/unpushed work, merge it, and clean up."
+    g = Git(".")
+    if not g.exists: raise SystemExit("Not a git repository")
+
+    try: default = g.remote('show', 'origin', split="\n", mute_errors=True).split("HEAD branch:")[1].split()[0]
+    except Exception: default = "main"
+
+    current = g.branch(show_current=True).strip()
+    if current != default: raise SystemExit(f"Must be on {default} branch (currently on {current})")
+
+    g.fetch('origin')
+    try: behind = bool(g.log(f'HEAD..origin/{default}', oneline=True, mute_errors=True).strip())
+    except Exception: behind = False
+    if behind: raise SystemExit(f"Local {default} is behind origin. Run: git pull")
+
+    try: has_commits = bool(g.log(f'origin/{default}..HEAD', oneline=True, mute_errors=True).strip())
+    except Exception: has_commits = False
+    has_changes = bool(g.status(porcelain=True))
+    if not has_commits and not has_changes:
+        raise SystemExit("Nothing to PR: no unpushed commits and no uncommitted changes")
+
+    slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')[:50]
+    if len(slug) == 50: slug = slug.rsplit('-', 1)[0]
+    pr_branch = branch or f"pr/{slug}"
+    g.switch('-c', pr_branch)
+
+    try:
+        if has_changes: g.commit('-am', title)
+        g.push('-u', 'origin', pr_branch)
+
+        owner, repo_name = repo.split("/", 1) if repo and "/" in repo else _git_owner_repo()
+        if not owner or not repo_name: raise SystemExit("Could not determine GitHub repo. Use --repo OWNER/REPO")
+
+        token = ifnone(token, os.getenv("FASTSHIP_TOKEN"))
+        if not token and Path("token").exists(): token = Path("token").read_text().strip()
+        token = ifnone(token, os.getenv("GITHUB_TOKEN"))
+        if not token: raise SystemExit("No GitHub token found")
+
+        gh = GhApi(owner, repo_name, token)
+        pr_body = Path(body).read_text().strip() if body and Path(body).exists() else body
+        pr = gh.pulls.create(title=title, head=pr_branch, base=default, body=pr_body)
+        print(f"Created PR #{pr.number}: {pr.html_url}")
+
+        try: gh.issues.add_labels(pr.number, labels=[label])
+        except Exception: pass
+
+        gh.pulls.merge(pr.number, merge_method="squash", commit_title=title)
+        print(f"Merged PR #{pr.number}")
+
+        try: gh.git.delete_ref(f"heads/{pr_branch}")
+        except Exception: pass
+
+    finally:
+        g.switch(default)
+
+    g.fetch('origin')
+    g.reset('--hard', f'origin/{default}')
+    print(f"Done! {default} updated to include squashed commit.")
+
+@call_parse
+@delegates(ship_pr)
+def ship_pr_cli(
+    title: str,  # PR title (also used for commit message if needed)
+    **kwargs
+): ship_pr(title, **kwargs)
