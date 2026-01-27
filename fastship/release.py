@@ -9,7 +9,7 @@ from __future__ import annotations
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "get_config", "bump_version", "Release", "ship_bump",
     "ship_bump_cli", "ship_pypi", "ship_pypi_cli", "ship_changelog", "ship_changelog_cli", "ship_release_gh",
-    "ship_release_gh_cli", "ship_new", "ship_new_cli", "ship_pr", "ship_pr_cli"]
+    "ship_release_gh_cli", "ship_release", "ship_release_cli", "ship_new", "ship_new_cli", "ship_pr", "ship_pr_cli"]
 
 import os, re, sys, shutil, subprocess, ast, importlib.resources
 from dataclasses import dataclass
@@ -410,6 +410,26 @@ def ship_release_gh(
 @call_parse
 @delegates(ship_release_gh)
 def ship_release_gh_cli(**kwargs): ship_release_gh(**kwargs)
+
+
+def ship_release(
+    token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
+    repo: str = None,   # Override repo ("OWNER/REPO")
+    repository: str = "pypi",  # PyPI repository in ~/.pypirc
+):
+    "Release to GitHub and PyPI, bump version, and push (assumes CHANGELOG.md is ready)."
+    ship_release_gh(token=token, repo=repo, no_changelog=True)
+    ship_pypi(repository=repository)
+    ship_bump()
+    run("git commit -am bump")
+    run("git push")
+
+@call_parse
+@delegates(ship_release)
+def ship_release_cli(**kwargs):
+    "Release to GitHub and PyPI, bump version, and push (assumes CHANGELOG.md is ready)."
+    ship_release(**kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Project scaffolding

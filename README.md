@@ -120,6 +120,21 @@ ship_release_gh --no-changelog
 
 The token must have permission to create releases (typically `repo` scope for classic PATs, or appropriate fine-grained permissions).
 
+### `ship_release`
+
+Full release workflow assuming changelog is ready:
+
+```bash
+ship_changelog      # generate changelog, edit as needed
+ship_release        # release to GitHub + PyPI, bump version, push
+```
+
+This runs:
+1. `ship_release_gh --no_changelog` (commit, push, create GitHub release)
+2. `ship_pypi` (upload to PyPI)
+3. `ship_bump` (bump patch version)
+4. Commit and push the version bump
+
 ## Notes
 
 - `ship_pypi` does *not* bump your version for you — keep it explicit and boring.
