@@ -256,13 +256,13 @@ def bump_version(version: str, part: int = 2, unbump: bool = False) -> str:
 def _issue_txt(issue):
     res = f"- {issue.title.strip()} ([#{issue.number}]({issue.html_url}))"
     if hasattr(issue, "pull_request"): res += f", thanks to [@{issue.user.login}]({issue.user.html_url})"
-    return res + "\n"
+    return res
 
 
 def _issues_txt(iss, label):
     if not iss: return ""
     res = f"### {label}\n\n"
-    return res + "\n".join(map(_issue_txt, iss))
+    return res + "\n".join(map(_issue_txt, iss)) + "\n"
 
 
 class Release:
