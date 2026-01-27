@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.4
+
+### New Features
+
+- project.urls in `ship_new` template with `gh_org` param ([#4](https://github.com/AnswerDotAI/fastship/pull/4)), thanks to [@jph00](https://github.com/jph00)
+
+
 ## 0.0.3
 
 ### New Features
