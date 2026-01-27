@@ -17,7 +17,6 @@ Create a new project:
 ```bash
 ship_new my-project
 cd my-project
-python -m venv .venv && . .venv/bin/activate
 pip install -e .[dev]
 ```
 

@@ -61,5 +61,3 @@ version = { attr = "fastship.__version__" }
 where = ["."]
 include = ["fastship*"]
 
-[tool.fastship]
-branch = "main"
