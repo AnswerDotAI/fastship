@@ -413,7 +413,7 @@ def _write(p:Path, s:str):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8")
 
-def _template_pyproject(proj_name:str, pkg_name:str, desc:str)->str:
+def _template_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return f"""[build-system]
 requires = [\"setuptools>=68\", \"wheel\"]
 build-backend = \"setuptools.build_meta\"
@@ -440,11 +440,11 @@ dev = [
   \"twine\",
 ]
 
+[project.urls]
+Homepage = \"https://github.com/{gh_org}/{proj_name}\"
+
 [tool.setuptools.dynamic]
 version = {{ attr = \"{pkg_name}.__version__\" }}
-
-[tool.fastship]
-branch = \"main\"
 """
 
 def _template_readme(proj_name:str, pkg_name:str)->str:
@@ -453,8 +453,6 @@ def _template_readme(proj_name:str, pkg_name:str)->str:
 A modern Python package scaffolded by **fastship**.
 
 ## Development
-
-Create a virtualenv, then install dev tools:
 
 ```bash
 pip install -e .[dev]
@@ -511,6 +509,7 @@ def ship_new(
     package: str = None,    # Python package import name, e.g. "my_project" (defaults from `name`)
     description: str = "A Python package",  # Short project description
     path: str = ".",        # Directory to create the project folder in
+    gh_org: str = "AnswerDotAI",  # GitHub organization for project.urls
     force: bool = False,    # Overwrite if the folder already exists
 ):
     "Create a modern setuptools project wired for fastship."
@@ -520,7 +519,7 @@ def ship_new(
         if not force: raise FileExistsError(f"{root} already exists (use force=True to overwrite)")
         shutil.rmtree(root)
 
-    _write(root/"pyproject.toml", _template_pyproject(name, pkg, description))
+    _write(root/"pyproject.toml", _template_pyproject(name, pkg, description, gh_org))
     _write(root/"README.md", _template_readme(name, pkg))
     _write(root/"CHANGELOG.md", "<!-- do not remove -->\n\n")
     _write(root/"LICENSE", _read_license())
@@ -573,8 +572,7 @@ def ship_pr(
     try: has_commits = bool(g.log(f'origin/{default}..HEAD', oneline=True, mute_errors=True).strip())
     except Exception: has_commits = False
     has_changes = bool(g.status(porcelain=True))
-    if not has_commits and not has_changes:
-        raise SystemExit("Nothing to PR: no unpushed commits and no uncommitted changes")
+    if not has_commits and not has_changes: raise SystemExit("Nothing to PR: no unpushed commits and no uncommitted changes")
 
     slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')[:50]
     if len(slug) == 50: slug = slug.rsplit('-', 1)[0]
@@ -607,8 +605,7 @@ def ship_pr(
         try: gh.git.delete_ref(f"heads/{pr_branch}")
         except Exception: pass
 
-    finally:
-        g.switch(default)
+    finally: g.switch(default)
 
     g.fetch('origin')
     g.reset('--hard', f'origin/{default}')
