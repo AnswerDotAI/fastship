@@ -80,6 +80,16 @@ This command:
 
 You must be on the default branch (usually `main`) with no unpulled changes.
 
+### `ship_changelog`
+
+Generate or update `CHANGELOG.md` from closed GitHub issues since your last release:
+
+```bash
+ship_changelog
+```
+
+This is useful when you want to edit the changelog separately (e.g., in an editor or Claude Code) before releasing.
+
 ### `ship_release_gh`
 
 This is an interactive helper:
@@ -92,6 +102,12 @@ This is an interactive helper:
 
 ```bash
 ship_release_gh
+```
+
+If you've already prepared the changelog (e.g., via `ship_changelog`), skip the changelog step:
+
+```bash
+ship_release_gh --no-changelog
 ```
 
 #### GitHub token setup
