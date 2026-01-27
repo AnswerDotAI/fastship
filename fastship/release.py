@@ -297,7 +297,7 @@ class Release:
             print(f"Error: Version bump required: expected: >{lr.tag_name}, got: {self.cfg.version}.")
             raise SystemExit(1)
 
-        res = f"\n## {self.cfg.version}\n"
+        res = f"\n## {self.cfg.version}\n\n"
         issues = parallel(self._issues, self.groups.keys(), progress=False, threadpool=True)
         res += "".join(_issues_txt(*o) for o in zip(issues, self.groups.values()))
 
