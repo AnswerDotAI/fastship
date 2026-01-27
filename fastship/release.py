@@ -8,8 +8,8 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 from __future__ import annotations
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "get_config", "bump_version", "Release", "ship_bump",
-    "ship_bump_cli", "ship_pypi", "ship_pypi_cli", "ship_release_gh", "ship_release_gh_cli", "ship_new", "ship_new_cli",
-    "ship_pr", "ship_pr_cli"]
+    "ship_bump_cli", "ship_pypi", "ship_pypi_cli", "ship_changelog", "ship_changelog_cli", "ship_release_gh",
+    "ship_release_gh_cli", "ship_new", "ship_new_cli", "ship_pr", "ship_pr_cli"]
 
 import os, re, sys, shutil, subprocess, ast, importlib.resources
 from dataclasses import dataclass
@@ -131,6 +131,21 @@ def _git_branch(default: str = "main") -> str:
 def _git_owner_repo() -> tuple[str | None, str | None]:
     try: return repo_details(run("git config --get remote.origin.url").strip())
     except Exception: return None, None
+
+
+def _parse_repo(repo: str = None) -> tuple[str | None, str | None]:
+    "Parse 'OWNER/REPO' string, falling back to git origin."
+    if repo and "/" in repo: return repo.split("/", 1)
+    g_owner, g_repo = _git_owner_repo()
+    return g_owner, repo or g_repo
+
+
+def _get_token(root: Path = None) -> str | None:
+    "Find GitHub token from env vars or token file."
+    token = os.getenv("FASTSHIP_TOKEN")
+    if not token and root and (root / "token").exists(): token = (root / "token").read_text().strip()
+    if not token and Path("token").exists(): token = Path("token").read_text().strip()
+    return token or os.getenv("GITHUB_TOKEN")
 
 
 @dataclass
@@ -260,16 +275,11 @@ class Release:
 
         os.chdir(self.cfg.root)
 
-        # Repo inference: allow override, else use git origin
-        g_owner, g_repo = _git_owner_repo()
-        owner, repo = owner or g_owner, repo or g_repo
+        owner, repo = _parse_repo(repo) if not owner else (owner, repo)
         if not owner or not repo:
             raise Exception("Could not infer GitHub owner/repo. Pass --repo OWNER/REPO or set a git remote `origin`.")
 
-        # Token discovery (mirrors nbdev/fastrelease conventions)
-        token = ifnone(token, os.getenv("FASTSHIP_TOKEN", None))
-        if not token and (self.cfg.root / "token").exists(): token = (self.cfg.root / "token").read_text().strip()
-        token = ifnone(token, os.getenv("GITHUB_TOKEN", None))
+        token = token or _get_token(self.cfg.root)
         if not token: raise Exception("Failed to find token (FASTSHIP_TOKEN, GITHUB_TOKEN, or a ./token file)")
 
         self.gh = GhApi(owner, repo, token)
@@ -308,6 +318,7 @@ class Release:
         shutil.copy(self.changefile, self.changefile.with_suffix(".bak"))
         self.changefile.write_text(txt, encoding="utf-8")
         run(f"git add {self.changefile}")
+        return self
 
     def latest_notes(self) -> str:
         "Latest CHANGELOG entry (the most recent `## <version>` section)."
@@ -318,10 +329,8 @@ class Release:
 
     def release(self):
         "Tag and create a release in GitHub for the current version."
-        ver = self.cfg.version
-        notes = self.latest_notes()
-        self.gh.create_release(ver, branch=self.cfg.branch, body=notes)
-        return ver
+        self.gh.create_release(self.cfg.version, branch=self.cfg.branch, body=self.latest_notes())
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -334,12 +343,10 @@ def ship_bump(
 ):
     "Increment `__version__` in your package `__init__.py` by one."
     cfg = get_config()
-    old = cfg.version
-    print(f"Old version: {old}")
-    new = bump_version(old, part=part, unbump=unbump)
+    print(f"Old version: {cfg.version}")
+    new = bump_version(cfg.version, part=part, unbump=unbump)
     _write_version(cfg.init_file, new)
     print(f"New version: {new}")
-    return new
 
 @call_parse
 @delegates(ship_bump)
@@ -372,25 +379,33 @@ def ship_pypi(
 def ship_pypi_cli(**kwargs): ship_pypi(**kwargs)
 
 
+def ship_changelog(
+    token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
+    repo: str = None,   # Override repo ("OWNER/REPO")
+):
+    "Create/update CHANGELOG.md from closed GitHub issues (without opening editor or releasing)."
+    print(f"Updated {Release(repo=repo, token=token).changelog().changefile}")
+
+@call_parse
+@delegates(ship_changelog)
+def ship_changelog_cli(**kwargs): ship_changelog(**kwargs)
+
+
 def ship_release_gh(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
-    repo: str = None,   # Override repo ("OWNER/REPO" or just "REPO" if origin remote is set)
+    repo: str = None,   # Override repo ("OWNER/REPO")
+    no_changelog: bool = False,  # Skip changelog generation (assumes CHANGELOG.md is ready)
 ):
     "Create/update CHANGELOG.md, let you edit it, then commit/push and create a GitHub release."
-    owner = None
-    if repo and "/" in repo: owner, repo = repo.split("/", 1)
-
-    rel = Release(owner=owner, repo=repo, token=token)
-    rel.changelog()
-    subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
-
-    if not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
+    rel = Release(repo=repo, token=token)
+    if not no_changelog:
+        rel.changelog()
+        subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
+        if not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
 
     run("git commit -am release")
     run("git push")
-    ver = rel.release()
-    print(f"Released {ver}")
-    return ver
+    print(f"Released {rel.release().cfg.version}")
 
 @call_parse
 @delegates(ship_release_gh)
@@ -530,7 +545,6 @@ def ship_new(
     print(f"Created {root}")
     print(f"Next:\n  cd {root}")
     print("  pip install -e .[dev]")
-    return root
 
 @call_parse
 @delegates(ship_new)
@@ -583,12 +597,10 @@ def ship_pr(
         if has_changes: g.commit('-am', title)
         g.push('-u', 'origin', pr_branch)
 
-        owner, repo_name = repo.split("/", 1) if repo and "/" in repo else _git_owner_repo()
+        owner, repo_name = _parse_repo(repo)
         if not owner or not repo_name: raise SystemExit("Could not determine GitHub repo. Use --repo OWNER/REPO")
 
-        token = ifnone(token, os.getenv("FASTSHIP_TOKEN"))
-        if not token and Path("token").exists(): token = Path("token").read_text().strip()
-        token = ifnone(token, os.getenv("GITHUB_TOKEN"))
+        token = token or _get_token()
         if not token: raise SystemExit("No GitHub token found")
 
         gh = GhApi(owner, repo_name, token)
