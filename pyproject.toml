@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastship"
+dynamic = ["version"]
+description = "Local-first release CLI tools: ship_bump, ship_pypi, ship_release_gh"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Jeremy Howard" }]
+keywords = ["release", "pypi", "github", "ghapi", "twine", "versioning"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: Software Development :: Version Control :: Git",
+]
+dependencies = [
+  "fastcore>=1.5.29",
+  "ghapi>=1.0.5",
+  "packaging>=23.0",
+  "build>=1.0.0",
+  "twine>=5.0.0",
+  "pyyaml>=6.0",
+  'tomli>=2.0.0; python_version < "3.11"',
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.urls]
+Source = "https://github.com/answerdotai/fastship"
+
+[project.scripts]
+ship_bump = "fastship.release:ship_bump_cli"
+ship_pypi = "fastship.release:ship_pypi_cli"
+ship_release_gh = "fastship.release:ship_release_gh_cli"
+ship_new = "fastship.release:ship_new_cli"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+fastship = ["LICENSE"]
+
+[tool.setuptools.dynamic]
+version = { attr = "fastship.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fastship*"]
+
+[tool.fastship]
+branch = "main"
