@@ -241,9 +241,7 @@ def bump_version(version: str, part: int = 2, unbump: bool = False) -> str:
 def _issue_txt(issue):
     res = f"- {issue.title.strip()} ([#{issue.number}]({issue.html_url}))"
     if hasattr(issue, "pull_request"): res += f", thanks to [@{issue.user.login}]({issue.user.html_url})"
-    res += "\n"
-    if not getattr(issue, "body", None): return res
-    return res + f"  - {issue.body.strip()}\n"
+    return res + "\n"
 
 
 def _issues_txt(iss, label):
