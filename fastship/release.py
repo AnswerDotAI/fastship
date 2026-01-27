@@ -597,7 +597,7 @@ def ship_pr(
         if not token: raise SystemExit("No GitHub token found")
 
         gh = GhApi(owner, repo_name, token)
-        pr_body = Path(body).read_text().strip() if body and Path(body).exists() else body
+        pr_body = Path(body).read_text().strip() if body and '\n' not in body and Path(body).exists() else body
         pr = gh.pulls.create(title=title, head=pr_branch, base=default, body=pr_body)
         print(f"Created PR #{pr.number}: {pr.html_url}")
 
