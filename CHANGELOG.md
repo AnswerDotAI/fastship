@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.6
+
+### New Features
+
+- Add ship_release for full release workflow ([#6](https://github.com/AnswerDotAI/fastship/pull/6)), thanks to [@jph00](https://github.com/jph00)
+
+
 ## 0.0.5
 
 ### New Features
