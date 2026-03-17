@@ -110,6 +110,8 @@ If you've already prepared the changelog (e.g., via `ship-changelog`), skip the 
 ship-release-gh --no-changelog
 ```
 
+This still opens `CHANGELOG.md` in your editor for final review before the release is created.
+
 #### GitHub token setup
 
 `ship-release-gh` looks for a token in this order:
@@ -130,7 +132,7 @@ ship-release        # release to GitHub + PyPI, bump version, push
 ```
 
 This runs:
-1. `ship-release-gh --no_changelog` (commit, push, create GitHub release)
+1. `ship-release-gh --no_changelog` (open `CHANGELOG.md` for final review, commit if needed, push, create GitHub release)
 2. `ship-pypi` (upload to PyPI)
 3. `ship-bump` (bump patch version)
 4. Commit and push the version bump

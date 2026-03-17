@@ -139,6 +139,11 @@ def _parse_repo(repo: str = None) -> tuple[str | None, str | None]:
     return g_owner, repo or g_repo
 
 
+def _git_has_changes() -> bool:
+    "Return `True` if the current git worktree has staged or unstaged changes."
+    return bool(run("git status --porcelain").strip())
+
+
 def _get_token(root: Path = None) -> str | None:
     "Find GitHub token from env vars or token file."
     token = os.getenv("FASTSHIP_TOKEN")
@@ -389,12 +394,11 @@ def ship_release_gh(
 ):
     "Create/update CHANGELOG.md, let you edit it, then commit/push and create a GitHub release."
     rel = Release(repo=repo, token=token)
-    if not no_changelog:
-        rel.changelog()
-        subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
-        if not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
+    if not no_changelog: rel.changelog()
+    subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
+    if not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
 
-    run("git commit -am release")
+    if _git_has_changes(): run("git commit -am release")
     run("git push")
     print(f"Released {rel.release().cfg.version}")
 
@@ -548,6 +552,7 @@ def ship_new(
     print(f"Created {root}")
     print(f"Next:\n  cd {root}")
     print("  pip install -e .[dev]")
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -617,4 +622,3 @@ def ship_pr(
     g.fetch('origin')
     g.reset('--hard', f'origin/{default}')
     print(f"Done! {default} updated to include squashed commit.")
-
