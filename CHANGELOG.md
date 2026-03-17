@@ -4,6 +4,9 @@
 
 ## 0.0.7
 
+### New Features
+
+- Replace underscore with hyphen ([#7](https://github.com/AnswerDotAI/fastship/issues/7))
 
 
 ## 0.0.6
