@@ -2,7 +2,7 @@
 
 Tiny, local-first release tools for modern Python projects.
 
-`fastship` gives you the same *workflow feel* as the nbdev `nbdev_bump_version`, `release_pypi`, and `release_gh` commands — but for plain (non-notebook) Python projects.
+`fastship` gives you the same *workflow feel* as the nbdev `nbdev-bump-version`, `release-pypi`, and `release-gh` commands — but for plain (non-notebook) Python projects.
 
 ## Install
 
@@ -15,7 +15,7 @@ pip install fastship
 Create a new project:
 
 ```bash
-ship_new my-project
+ship-new my-project
 cd my-project
 pip install -e .[dev]
 ```
@@ -24,50 +24,50 @@ This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, R
 
 ## Commands
 
-### `ship_bump`
+### `ship-bump`
 
 Bump a version part (0=major, 1=minor, 2=patch):
 
 ```bash
-ship_bump --part 2
-ship_bump --part 1
-ship_bump --part 0
+ship-bump --part 2
+ship-bump --part 1
+ship-bump --part 0
 ```
 
 Decrement instead:
 
 ```bash
-ship_bump --part 2 --unbump
+ship-bump --part 2 --unbump
 ```
 
-### `ship_pypi`
+### `ship-pypi`
 
 Build + upload to PyPI:
 
 ```bash
-ship_pypi
+ship-pypi
 ```
 
 Upload to a named repository in `~/.pypirc` (e.g. `testpypi`):
 
 ```bash
-ship_pypi --repository testpypi
+ship-pypi --repository testpypi
 ```
 
 Quiet mode:
 
 ```bash
-ship_pypi --quiet
+ship-pypi --quiet
 ```
 
-### `ship_pr`
+### `ship-pr`
 
 Create a PR from uncommitted or unpushed work, merge it immediately, and clean up:
 
 ```bash
-ship_pr "Add new feature"
-ship_pr "Fix bug" --label bug
-ship_pr "Breaking change" --label breaking
+ship-pr "Add new feature"
+ship-pr "Fix bug" --label bug
+ship-pr "Breaking change" --label breaking
 ```
 
 This command:
@@ -80,17 +80,17 @@ This command:
 
 You must be on the default branch (usually `main`) with no unpulled changes.
 
-### `ship_changelog`
+### `ship-changelog`
 
 Generate or update `CHANGELOG.md` from closed GitHub issues since your last release:
 
 ```bash
-ship_changelog
+ship-changelog
 ```
 
 This is useful when you want to edit the changelog separately (e.g., in an editor or Claude Code) before releasing.
 
-### `ship_release_gh`
+### `ship-release-gh`
 
 This is an interactive helper:
 
@@ -101,18 +101,18 @@ This is an interactive helper:
 5. Creates a GitHub release tagged with your current `__version__`
 
 ```bash
-ship_release_gh
+ship-release-gh
 ```
 
-If you've already prepared the changelog (e.g., via `ship_changelog`), skip the changelog step:
+If you've already prepared the changelog (e.g., via `ship-changelog`), skip the changelog step:
 
 ```bash
-ship_release_gh --no-changelog
+ship-release-gh --no-changelog
 ```
 
 #### GitHub token setup
 
-`ship_release_gh` looks for a token in this order:
+`ship-release-gh` looks for a token in this order:
 
 1. `FASTSHIP_TOKEN`
 2. a `./token` file in your repo root
@@ -120,25 +120,25 @@ ship_release_gh --no-changelog
 
 The token must have permission to create releases (typically `repo` scope for classic PATs, or appropriate fine-grained permissions).
 
-### `ship_release`
+### `ship-release`
 
 Full release workflow assuming changelog is ready:
 
 ```bash
-ship_changelog      # generate changelog, edit as needed
-ship_release        # release to GitHub + PyPI, bump version, push
+ship-changelog      # generate changelog, edit as needed
+ship-release        # release to GitHub + PyPI, bump version, push
 ```
 
 This runs:
-1. `ship_release_gh --no_changelog` (commit, push, create GitHub release)
-2. `ship_pypi` (upload to PyPI)
-3. `ship_bump` (bump patch version)
+1. `ship-release-gh --no_changelog` (commit, push, create GitHub release)
+2. `ship-pypi` (upload to PyPI)
+3. `ship-bump` (bump patch version)
 4. Commit and push the version bump
 
 ## Notes
 
-- `ship_pypi` does *not* bump your version for you — keep it explicit and boring.
-- `ship_release_gh` requires that your project has a git `origin` remote pointing at GitHub (or use `--repo OWNER/REPO`).
+- `ship-pypi` does *not* bump your version for you — keep it explicit and boring.
+- `ship-release-gh` requires that your project has a git `origin` remote pointing at GitHub (or use `--repo OWNER/REPO`).
 
 ## Existing projects
 
@@ -163,7 +163,7 @@ dynamic = ["version"]
 version = { attr = "my_project.__version__" }
 ```
 
-Keep `__version__ = "x.y.z"` as a simple literal (don't compute it). `ship_bump` will rewrite this line near the top of the file to keep builds happy.
+Keep `__version__ = "x.y.z"` as a simple literal (don't compute it). `ship-bump` will rewrite this line near the top of the file to keep builds happy.
 
 ### 3) Optional: specify branch
 

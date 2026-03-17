@@ -8,8 +8,7 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 from __future__ import annotations
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "get_config", "bump_version", "Release", "ship_bump",
-    "ship_bump_cli", "ship_pypi", "ship_pypi_cli", "ship_changelog", "ship_changelog_cli", "ship_release_gh",
-    "ship_release_gh_cli", "ship_release", "ship_release_cli", "ship_new", "ship_new_cli", "ship_pr", "ship_pr_cli"]
+    "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr"]
 
 import os, re, sys, shutil, subprocess, ast, importlib.resources
 from dataclasses import dataclass
@@ -337,6 +336,7 @@ class Release:
 # CLI entrypoints
 # ---------------------------------------------------------------------------
 
+@call_parse
 def ship_bump(
     part: int = 2,  # Part of version to bump (0=major, 1=minor, 2=patch)
     unbump: bool = False,  # Reduce version instead of increasing it
@@ -348,10 +348,6 @@ def ship_bump(
     _write_version(cfg.init_file, new)
     print(f"New version: {new}")
 
-@call_parse
-@delegates(ship_bump)
-def ship_bump_cli(**kwargs): ship_bump(**kwargs)
-
 
 def _clean_dist(root: Path):
     for d in ("dist", "build"):
@@ -361,6 +357,7 @@ def _clean_dist(root: Path):
         if p.is_dir(): shutil.rmtree(p)
 
 
+@call_parse
 def ship_pypi(
     repository: str = "pypi",  # Repository in ~/.pypirc (e.g. "pypi" or "testpypi")
     quiet: bool = False,  # Reduce output verbosity
@@ -374,11 +371,8 @@ def ship_pypi(
     run(f"{sys.executable} -m build{q}")
     run(f"twine upload --repository {repository}{p} dist/*")
 
+
 @call_parse
-@delegates(ship_pypi)
-def ship_pypi_cli(**kwargs): ship_pypi(**kwargs)
-
-
 def ship_changelog(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
@@ -386,11 +380,8 @@ def ship_changelog(
     "Create/update CHANGELOG.md from closed GitHub issues (without opening editor or releasing)."
     print(f"Updated {Release(repo=repo, token=token).changelog().changefile}")
 
+
 @call_parse
-@delegates(ship_changelog)
-def ship_changelog_cli(**kwargs): ship_changelog(**kwargs)
-
-
 def ship_release_gh(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
@@ -407,11 +398,8 @@ def ship_release_gh(
     run("git push")
     print(f"Released {rel.release().cfg.version}")
 
+
 @call_parse
-@delegates(ship_release_gh)
-def ship_release_gh_cli(**kwargs): ship_release_gh(**kwargs)
-
-
 def ship_release(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
@@ -423,12 +411,6 @@ def ship_release(
     ship_bump()
     run("git commit -am bump")
     run("git push")
-
-@call_parse
-@delegates(ship_release)
-def ship_release_cli(**kwargs):
-    "Release to GitHub and PyPI, bump version, and push (assumes CHANGELOG.md is ready)."
-    ship_release(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +521,7 @@ def _read_license():
     "Read the Apache 2.0 license from the package."
     return importlib.resources.files("fastship").joinpath("LICENSE").read_text(encoding="utf-8")
 
+@call_parse
 def ship_new(
     name: str,              # Project name (PyPI name), e.g. "my-project"
     package: str = None,    # Python package import name, e.g. "my_project" (defaults from `name`)
@@ -566,20 +549,12 @@ def ship_new(
     print(f"Next:\n  cd {root}")
     print("  pip install -e .[dev]")
 
-@call_parse
-@delegates(ship_new)
-def ship_new_cli(
-    name: str,  # Project name (PyPI name), e.g. "my-project"
-    **kwargs
-):
-    "Create a modern setuptools project wired for fastship."
-    ship_new(name, **kwargs)
-
 
 # ---------------------------------------------------------------------------
 # Quick PR workflow
 # ---------------------------------------------------------------------------
 
+@call_parse
 def ship_pr(
     title: str,             # PR title (also used for commit message if needed)
     branch: str = None,     # Branch name (auto-generated from title if not provided)
@@ -643,9 +618,3 @@ def ship_pr(
     g.reset('--hard', f'origin/{default}')
     print(f"Done! {default} updated to include squashed commit.")
 
-@call_parse
-@delegates(ship_pr)
-def ship_pr_cli(
-    title: str,  # PR title (also used for commit message if needed)
-    **kwargs
-): ship_pr(title, **kwargs)

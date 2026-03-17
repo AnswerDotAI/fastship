@@ -42,13 +42,13 @@ dev = ["pytest"]
 Source = "https://github.com/answerdotai/fastship"
 
 [project.scripts]
-ship_bump = "fastship.release:ship_bump_cli"
-ship_pypi = "fastship.release:ship_pypi_cli"
-ship_changelog = "fastship.release:ship_changelog_cli"
-ship_release_gh = "fastship.release:ship_release_gh_cli"
-ship_release = "fastship.release:ship_release_cli"
-ship_new = "fastship.release:ship_new_cli"
-ship_pr = "fastship.release:ship_pr_cli"
+ship-bump = "fastship.release:ship_bump"
+ship-pypi = "fastship.release:ship_pypi"
+ship-changelog = "fastship.release:ship_changelog"
+ship-gh = "fastship.release:ship_release_gh"
+ship-release = "fastship.release:ship_release"
+ship-new = "fastship.release:ship_new"
+ship-pr = "fastship.release:ship_pr"
 
 [tool.setuptools]
 include-package-data = true
