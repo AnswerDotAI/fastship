@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.8
+
+### New Features
+
+- Allow changelog review even with --no-changelog and skip commit when worktree is clean ([#8](https://github.com/AnswerDotAI/fastship/issues/8))
+
+
 ## 0.0.7
 
 ### New Features
