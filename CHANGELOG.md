@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.9
+
+### New Features
+
+- Add `CHANGELOG_MARKER` constant and validate its presence before inserting release notes ([#9](https://github.com/AnswerDotAI/fastship/issues/9))
+
+
 ## 0.0.8
 
 ### New Features
