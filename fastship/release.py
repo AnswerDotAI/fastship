@@ -22,6 +22,7 @@ from fastgit import Git
 from ghapi.core import *    # GhApi, HTTP404NotFoundError, ...
 
 GH_HOST = "https://api.github.com"
+CHANGELOG_MARKER = "<!-- do not remove -->\n"
 
 DEFAULT_LABEL_GROUPS = dict(breaking="Breaking Changes", enhancement="New Features", bug="Bugs Squashed")
 
@@ -298,9 +299,7 @@ class Release:
         Issues are pulled since the latest GitHub release's `published_at`.
         If no releases exist, all matching issues are included.
         """
-        if not self.changefile.exists():
-            self.changefile.write_text("# Release notes\n\n<!-- do not remove -->\n", encoding="utf-8")
-        marker = "<!-- do not remove -->\n"
+        if not self.changefile.exists(): self.changefile.write_text(f"# Release notes\n\n{CHANGELOG_MARKER}", encoding="utf-8")
 
         try:
             lr = self.gh.repos.get_latest_release()
@@ -318,7 +317,11 @@ class Release:
         if debug: return res
 
         txt = self.changefile.read_text(encoding="utf-8")
-        txt = txt.replace(marker, marker + res + "\n")
+        if CHANGELOG_MARKER not in txt:
+            raise ValueError(
+                f"{self.changefile} is missing the fastship changelog marker "
+                f"{CHANGELOG_MARKER.strip()!r}. Add it near the top of the file.")
+        txt = txt.replace(CHANGELOG_MARKER, CHANGELOG_MARKER + res + "\n")
         shutil.copy(self.changefile, self.changefile.with_suffix(".bak"))
         self.changefile.write_text(txt, encoding="utf-8")
         run(f"git add {self.changefile}")
