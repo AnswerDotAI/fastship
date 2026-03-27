@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fastship"
 dynamic = ["version"]
-description = "Local-first release CLI tools: ship_bump, ship_pypi, ship_release_gh"
+description = "Local-first release CLI tools: ship-bump, ship-pypi, ship-gh"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -59,4 +59,3 @@ version = { attr = "fastship.__version__" }
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["fastship*"]
-

@@ -488,9 +488,9 @@ Version lives in `{pkg_name}/__init__.py` as `__version__`.
 Bump it with:
 
 ```bash
-ship_bump --part 2   # patch
-ship_bump --part 1   # minor
-ship_bump --part 0   # major
+ship-bump --part 2   # patch
+ship-bump --part 1   # minor
+ship-bump --part 0   # major
 ```
 
 ## Release
@@ -499,8 +499,8 @@ ship_bump --part 0   # major
 2) Run:
 
 ```bash
-ship_release_gh
-ship_pypi
+ship-gh
+ship-pypi
 ```
 """
 

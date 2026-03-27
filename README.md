@@ -91,7 +91,7 @@ ship-changelog
 This is useful when you want to edit the changelog separately (e.g., in an editor or Claude Code) before releasing.
 If you already have a `CHANGELOG.md`, it must include `<!-- do not remove -->` near the top so fastship knows where to insert the next release notes.
 
-### `ship-release-gh`
+### `ship-gh`
 
 This is an interactive helper:
 
@@ -102,20 +102,20 @@ This is an interactive helper:
 5. Creates a GitHub release tagged with your current `__version__`
 
 ```bash
-ship-release-gh
+ship-gh
 ```
 
 If you've already prepared the changelog (e.g., via `ship-changelog`), skip the changelog step:
 
 ```bash
-ship-release-gh --no-changelog
+ship-gh --no_changelog
 ```
 
 This still opens `CHANGELOG.md` in your editor for final review before the release is created.
 
 #### GitHub token setup
 
-`ship-release-gh` looks for a token in this order:
+`ship-gh` looks for a token in this order:
 
 1. `FASTSHIP_TOKEN`
 2. a `./token` file in your repo root
@@ -133,7 +133,7 @@ ship-release        # release to GitHub + PyPI, bump version, push
 ```
 
 This runs:
-1. `ship-release-gh --no_changelog` (open `CHANGELOG.md` for final review, commit if needed, push, create GitHub release)
+1. `ship-gh --no_changelog` (open `CHANGELOG.md` for final review, commit if needed, push, create GitHub release)
 2. `ship-pypi` (upload to PyPI)
 3. `ship-bump` (bump patch version)
 4. Commit and push the version bump
@@ -141,7 +141,7 @@ This runs:
 ## Notes
 
 - `ship-pypi` does *not* bump your version for you — keep it explicit and boring.
-- `ship-release-gh` requires that your project has a git `origin` remote pointing at GitHub (or use `--repo OWNER/REPO`).
+- `ship-gh` requires that your project has a git `origin` remote pointing at GitHub (or use `--repo OWNER/REPO`).
 
 ## Existing projects
 
