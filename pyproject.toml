@@ -47,15 +47,8 @@ ship-release = "fastship.release:ship_release"
 ship-new = "fastship.release:ship_new"
 ship-pr = "fastship.release:ship_pr"
 
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.package-data]
-fastship = ["LICENSE"]
-
 [tool.setuptools.dynamic]
 version = { attr = "fastship.__version__" }
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["fastship*"]
+include = ["fastship"]

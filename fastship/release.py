@@ -469,6 +469,9 @@ Homepage = \"https://github.com/{gh_org}/{proj_name}\"
 
 [tool.setuptools.dynamic]
 version = {{ attr = \"{pkg_name}.__version__\" }}
+
+[tool.setuptools.packages.find]
+include = [\"{pkg_name}\"]
 """
 
 def _template_readme(proj_name:str, pkg_name:str)->str:
