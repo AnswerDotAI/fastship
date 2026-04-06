@@ -5,7 +5,6 @@ bump a plain `__version__`, upload with `python -m build` + `twine`,
 and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 """
 
-from __future__ import annotations
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "get_config", "bump_version", "Release", "ship_bump",
     "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr"]
