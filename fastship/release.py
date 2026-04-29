@@ -511,6 +511,7 @@ def _template_gitignore()->str:
 *.py[cod]
 *.so
 *.egg-info/
+tags
 dist/
 build/
 .venv/
