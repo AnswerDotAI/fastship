@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.11
+
+### New Features
+
+- Add ship-rs-new and ship-rs-init commands for scaffolding and configuring maturin/PyO3 projects, using Cargo.toml as the version source ([#12](https://github.com/AnswerDotAI/fastship/issues/12))
+
+
 ## 0.0.10
 
 ### New Features
