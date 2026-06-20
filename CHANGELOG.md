@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.12
+
+### New Features
+
+- Use project optional-dependencies extras for CI installs instead of separate pip install commands ([#13](https://github.com/AnswerDotAI/fastship/issues/13))
+
+
 ## 0.0.11
 
 ### New Features
