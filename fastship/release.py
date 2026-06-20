@@ -507,6 +507,7 @@ def _init_rs_config(root:Path, branch:str = None, force:bool = False):
     manifest = pyproj.parent / "Cargo.toml"
     if not manifest.exists(): raise SystemExit(f"Missing {manifest}")
     _ensure_project_dynamic_version(pyproj)
+    _ensure_toml_section(pyproj, "project.optional-dependencies", dict(dev=["fastship>=0.0.11", "maturin>=1.0,<2.0", "pytest"]))
     _ensure_rs_runtime_version(root, data)
     _ensure_py_runtime_version(root, data)
     maturin = nested_idx(data, "tool", "maturin") or {}
@@ -525,12 +526,12 @@ def _update_rs_ci(root:Path):
     txt = wf.read_text(encoding="utf-8")
     txt = txt.replace("- run: tools/build.sh release", "- run: ship-rs-prep --release")
     txt = txt.replace("- run: tools/build.sh", "- run: ship-rs-prep")
-    if "ship-rs-prep" in txt and "pip install fastship" not in txt:
+    if "ship-rs-prep" in txt and "pip install -e '.[dev]'" not in txt:
         lines, inserted = txt.splitlines(), False
         out = []
         for ln in lines:
             if not inserted and re.search(r"- run: ship-rs-prep(\s|$)", ln):
-                out.append(f"{ln.split('- run:', 1)[0]}- run: pip install fastship")
+                out.append(f"{ln.split('- run:', 1)[0]}- run: pip install -e '.[dev]'")
                 inserted = True
             out.append(ln)
         txt = "\n".join(out) + ("\n" if txt.endswith("\n") else "")
@@ -931,7 +932,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = [\"fastship\", \"maturin>=1.0,<2.0\", \"pytest\"]
+dev = [\"fastship>=0.0.11\", \"maturin>=1.0,<2.0\", \"pytest\"]
 
 [project.urls]
 Homepage = \"https://github.com/{gh_org}/{proj_name}\"
@@ -1088,7 +1089,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install fastship maturin pytest
+      - run: pip install -e '.[dev]'
       - run: ship-rs-test
 
   build:

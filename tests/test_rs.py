@@ -107,6 +107,7 @@ def test_ship_rs_init_configures_maturin_project(tmp_path, monkeypatch):
     assert 'branch = "main"' in txt
     assert 'dynamic = ["version"]' in txt
     assert 'version = "0.1.2"' not in txt
+    assert 'dev = ["fastship>=0.0.11", "maturin>=1.0,<2.0", "pytest"]' in txt
     assert 'bins = ["exhash", "lnhashview"]' in txt
     assert 'data_scripts = "python/exhash.data/scripts"' in txt
 
@@ -218,7 +219,7 @@ def test_ship_rs_init_can_update_ci(tmp_path, monkeypatch):
     txt = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert 'bins = []' in txt
     ci_txt = wf.read_text(encoding="utf-8")
-    assert ci_txt.count("pip install fastship") == 1
+    assert ci_txt.count("pip install -e '.[dev]'") == 1
     assert ci_txt.count("ship-rs-prep --release") == 1
 
 
