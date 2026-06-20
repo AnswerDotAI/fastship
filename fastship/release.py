@@ -6,10 +6,11 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 """
 
 
-__all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "get_config", "bump_version", "Release", "ship_bump",
-    "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr"]
+__all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
+    "ship_bump", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
+    "ship_rs_prep", "ship_rs_build", "ship_rs_test", "ship_rs_bump", "ship_rs_release"]
 
-import os, re, sys, shutil, subprocess, ast, importlib.resources
+import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, stat
 from dataclasses import dataclass
 
 try: import tomllib
@@ -168,6 +169,20 @@ class ShipConfig:
     def version(self) -> str: return _read_version(self.init_file)
 
 
+@dataclass
+class RustConfig:
+    root: Path
+    pyproject: Path
+    data: dict
+    manifest_path: Path
+    bins: list[str]
+    data_scripts: Path | None
+    branch: str
+
+    @property
+    def version(self) -> str: return (self.data.get("project") or {})["version"]
+
+
 def get_config(start: str | Path | None = None) -> ShipConfig:
     "Load fastship config from `pyproject.toml`."
     pyproj = _find_pyproject(start)
@@ -184,7 +199,26 @@ def get_config(start: str | Path | None = None) -> ShipConfig:
     label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
 
     return ShipConfig(root=root, pyproject=pyproj, data=data, pkg=pkg, pkg_path=pkg_path,
-                      init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups)
+        init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups)
+
+
+def get_rs_config(start: str | Path | None = None) -> RustConfig:
+    "Load fastship config for a maturin/PyO3 project."
+    pyproj = _find_pyproject(start)
+    root = pyproj.parent
+    data = _load_toml(pyproj)
+    proj = data.get("project") or {}
+    if not proj.get("version"): raise ValueError(f"{pyproj} must define [project].version for ship-rs commands")
+    ship = nested_idx(data, "tool", "fastship") or {}
+    rs = ship.get("rs") or {}
+    maturin = nested_idx(data, "tool", "maturin") or {}
+    bins = list(rs.get("bins") or [])
+    data_scripts = rs.get("data_scripts")
+    if not data_scripts and maturin.get("data"): data_scripts = str(Path(maturin["data"]) / "scripts")
+    data_scripts = root / data_scripts if data_scripts else None
+    branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
+    manifest_path = root / rs.get("manifest_path", "Cargo.toml")
+    return RustConfig(root=root, pyproject=pyproj, data=data, manifest_path=manifest_path, bins=bins, data_scripts=data_scripts, branch=branch)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +288,76 @@ def bump_version(version: str, part: int = 2, unbump: bool = False) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Rust/PyO3 helpers
+# ---------------------------------------------------------------------------
+
+def _q(s) -> str: return shlex.quote(str(s))
+
+
+def _replace_toml_section_key(p:Path, section:str, key:str, val:str):
+    "Replace `key = ...` inside a top-level TOML section."
+    lines = p.read_text(encoding="utf-8").splitlines()
+    in_sec = False
+    pat = re.compile(rf"^(\s*{re.escape(key)}\s*=\s*).*$")
+    for i, ln in enumerate(lines):
+        if re.match(r"^\s*\[[^\[].*\]\s*$", ln):
+            in_sec = ln.strip() == f"[{section}]"
+            continue
+        if in_sec and pat.match(ln):
+            lines[i] = f'{key} = "{val}"'
+            p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return
+    raise ValueError(f"Could not find {key!r} in [{section}] of {p}")
+
+
+def _bin_suffix(target:str = None) -> str:
+    if target and "windows" in target: return ".exe"
+    return ".exe" if os.name == "nt" else ""
+
+
+def _cargo_profile_dir(root:Path, profile:str, target:str = None) -> Path:
+    return root / "target" / target / profile if target else root / "target" / profile
+
+
+def _chmod_exec(p:Path):
+    try: p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except PermissionError: pass
+
+
+def _copy_rs_bins(cfg:RustConfig, release:bool = False, target:str = None):
+    "Build configured Rust bins and copy them into maturin's .data/scripts folder."
+    if not cfg.bins: return []
+    if not cfg.data_scripts: raise ValueError("Set [tool.fastship.rs].data_scripts or [tool.maturin].data before copying Rust bins")
+    os.chdir(cfg.root)
+    profile = "release" if release else "debug"
+    flags = " --release" if release else ""
+    target_arg = f" --target {_q(target)}" if target else ""
+    run(f"cargo build{flags}{target_arg} --bins")
+    cfg.data_scripts.mkdir(parents=True, exist_ok=True)
+    suffix = _bin_suffix(target)
+    res = []
+    for b in cfg.bins:
+        for old in (cfg.data_scripts / b, cfg.data_scripts / f"{b}.exe"):
+            if old.exists(): old.unlink()
+        src = _cargo_profile_dir(cfg.root, profile, target) / f"{b}{suffix}"
+        if not src.exists(): raise FileNotFoundError(f"Built binary not found: {src}")
+        dst = cfg.data_scripts / src.name
+        shutil.copy2(src, dst)
+        _chmod_exec(dst)
+        res.append(dst)
+    return res
+
+
+def _maturin_cmd(command:str, release:bool = False, target:str = None, outdir:str = None, args:str = "") -> str:
+    parts = ["maturin", command]
+    if release: parts.append("--release")
+    if target: parts += ["--target", _q(target)]
+    if outdir: parts += ["-o", _q(outdir)]
+    if args: parts.append(args)
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # GitHub release notes (changelog from issues) + release creation
 # ---------------------------------------------------------------------------
 
@@ -280,8 +384,7 @@ class Release:
         os.chdir(self.cfg.root)
 
         owner, repo = _parse_repo(repo) if not owner else (owner, repo)
-        if not owner or not repo:
-            raise Exception("Could not infer GitHub owner/repo. Pass --repo OWNER/REPO or set a git remote `origin`.")
+        if not owner or not repo: raise Exception("Could not infer GitHub owner/repo. Pass --repo OWNER/REPO or set a git remote `origin`.")
 
         token = token or _get_token(self.cfg.root)
         if not token: raise Exception("Failed to find token (FASTSHIP_TOKEN, GITHUB_TOKEN, or a ./token file)")
@@ -417,6 +520,73 @@ def ship_release(
     ship_bump()
     run("git commit -am bump")
     run("git push")
+
+
+@call_parse
+def ship_rs_prep(
+    release: bool = False,  # Build bins with `cargo build --release`
+    target: str = None,     # Optional Rust target triple
+):
+    "Build configured Rust CLI bins and copy them into maturin .data/scripts."
+    cfg = get_rs_config()
+    copied = _copy_rs_bins(cfg, release=release, target=target)
+    for p in copied: print(f"Copied {p}")
+
+
+@call_parse
+def ship_rs_build(
+    release: bool = True,  # Build release wheels by default
+    target: str = None,    # Optional Rust target triple
+    outdir: str = "dist",  # Wheel output directory
+    args: str = "",        # Extra arguments appended to `maturin build`
+):
+    "Prepare configured Rust CLI bins, then build wheels with maturin."
+    cfg = get_rs_config()
+    os.chdir(cfg.root)
+    _copy_rs_bins(cfg, release=release, target=target)
+    run(_maturin_cmd("build", release=release, target=target, outdir=outdir, args=args))
+
+
+@call_parse
+def ship_rs_test(
+    target: str = None,      # Optional Rust target triple for bin prep/develop
+    pytest_args: str = "-q", # Arguments passed to pytest
+):
+    "Run cargo tests, install the PyO3 module with maturin develop, then run pytest."
+    cfg = get_rs_config()
+    os.chdir(cfg.root)
+    run("cargo test")
+    _copy_rs_bins(cfg, release=False, target=target)
+    run(_maturin_cmd("develop", target=target))
+    run(f"pytest {pytest_args}")
+
+
+@call_parse
+def ship_rs_bump(
+    part: int = 2,          # Part of version to bump (0=major, 1=minor, 2=patch)
+    unbump: bool = False,   # Reduce version instead of increasing it
+):
+    "Bump `[project].version` in pyproject.toml and `[package].version` in Cargo.toml."
+    cfg = get_rs_config()
+    old = cfg.version
+    new = bump_version(old, part=part, unbump=unbump)
+    _replace_toml_section_key(cfg.pyproject, "project", "version", new)
+    _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
+    print(f"{old} -> {new}")
+
+
+@call_parse
+def ship_rs_release(
+    remote: str = "origin", # Git remote to push
+    branch: str = None,     # Branch to push (defaults to [tool.fastship].branch/current branch)
+):
+    "Tag `v<version>` and push branch plus tags, leaving CI to build/publish wheels."
+    cfg = get_rs_config()
+    os.chdir(cfg.root)
+    branch = branch or cfg.branch
+    run(f"git tag v{cfg.version}")
+    run(f"git push {remote} {branch} --tags")
+    print(f"Released v{cfg.version}")
 
 
 # ---------------------------------------------------------------------------

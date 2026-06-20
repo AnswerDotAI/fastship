@@ -46,6 +46,11 @@ ship-gh = "fastship.release:ship_release_gh"
 ship-release = "fastship.release:ship_release"
 ship-new = "fastship.release:ship_new"
 ship-pr = "fastship.release:ship_pr"
+ship-rs-prep = "fastship.release:ship_rs_prep"
+ship-rs-build = "fastship.release:ship_rs_build"
+ship-rs-test = "fastship.release:ship_rs_test"
+ship-rs-bump = "fastship.release:ship_rs_bump"
+ship-rs-release = "fastship.release:ship_rs_release"
 
 [tool.setuptools.dynamic]
 version = { attr = "fastship.__version__" }

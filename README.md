@@ -60,6 +60,30 @@ Quiet mode:
 ship-pypi --quiet
 ```
 
+### PyO3 / maturin projects
+
+Fastship can also handle the repeated local tooling for PyO3 projects that use maturin and need Rust CLI binaries bundled into wheel scripts.
+
+Configure the native bins once:
+
+```toml
+[tool.fastship.rs]
+bins = ["mycli", "myothercli"]
+data_scripts = "python/my_project.data/scripts"
+```
+
+If `data_scripts` is omitted, fastship uses `[tool.maturin].data` plus `/scripts`.
+
+Commands:
+
+```bash
+ship-rs-prep --release   # cargo build --release --bins, copy bins into .data/scripts
+ship-rs-build            # prep bins, then maturin build --release -o dist
+ship-rs-test             # cargo test, prep debug bins, maturin develop, pytest -q
+ship-rs-bump             # bump [project].version and Cargo.toml [package].version
+ship-rs-release          # tag v<version> and push branch + tags
+```
+
 ### `ship-pr`
 
 Create a PR from uncommitted or unpushed work, merge it immediately, and clean up:
