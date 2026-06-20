@@ -178,6 +178,7 @@ def test_ship_rs_new_scaffolds_build_test_release_project(tmp_path):
     assert 'name = "hello_rs"' in cargo
     assert 'pyo3 = { version = ">=0.28", optional = true }' in cargo
     assert 'extension-module = ["pyo3", "pyo3/extension-module"]' in cargo
+    assert 'pyo3 = ["dep:pyo3"]' in cargo
     assert 'm.add("__version__", env!("CARGO_PKG_VERSION"))?;' in rust
     assert '#[cfg(feature = "pyo3")]' in rust
     assert "from ._core import __version__, hello" in init

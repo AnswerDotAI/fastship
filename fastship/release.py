@@ -968,6 +968,7 @@ pyo3 = {{ version = \">=0.28\", optional = true }}
 
 [features]
 extension-module = [\"pyo3\", \"pyo3/extension-module\"]
+pyo3 = [\"dep:pyo3\"]
 """
 
 def _template_rs_lib()->str:
