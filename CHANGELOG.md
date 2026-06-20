@@ -2,6 +2,14 @@
 
 <!-- do not remove -->
 
+## 0.0.10
+
+### New Features
+
+- Add PyO3/maturin support with ship-rs-* commands for Rust CLI bin bundling ([#11](https://github.com/AnswerDotAI/fastship/issues/11))
+- Add package find config to project template and simplify fastship package discovery ([#10](https://github.com/AnswerDotAI/fastship/issues/10))
+
+
 ## 0.0.9
 
 ### New Features
