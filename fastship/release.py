@@ -8,7 +8,7 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
     "ship_bump", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
-    "ship_rs_prep", "ship_rs_build", "ship_rs_test", "ship_rs_bump", "ship_rs_release"]
+    "ship_rs_new", "ship_rs_init", "ship_rs_prep", "ship_rs_build", "ship_rs_test", "ship_rs_bump", "ship_rs_release"]
 
 import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, stat
 from dataclasses import dataclass
@@ -180,7 +180,7 @@ class RustConfig:
     branch: str
 
     @property
-    def version(self) -> str: return (self.data.get("project") or {})["version"]
+    def version(self) -> str: return _cargo_version(self.manifest_path)
 
 
 def get_config(start: str | Path | None = None) -> ShipConfig:
@@ -208,7 +208,9 @@ def get_rs_config(start: str | Path | None = None) -> RustConfig:
     root = pyproj.parent
     data = _load_toml(pyproj)
     proj = data.get("project") or {}
-    if not proj.get("version"): raise ValueError(f"{pyproj} must define [project].version for ship-rs commands")
+    if proj.get("version") is not None: raise ValueError(f'{pyproj} must use Cargo.toml for ship-rs versions; remove [project].version')
+    dyn = proj.get("dynamic") or []
+    if not isinstance(dyn, list) or "version" not in dyn: raise ValueError(f'{pyproj} must set [project].dynamic = ["version"] for ship-rs commands')
     ship = nested_idx(data, "tool", "fastship") or {}
     rs = ship.get("rs") or {}
     maturin = nested_idx(data, "tool", "maturin") or {}
@@ -355,6 +357,185 @@ def _maturin_cmd(command:str, release:bool = False, target:str = None, outdir:st
     if outdir: parts += ["-o", _q(outdir)]
     if args: parts.append(args)
     return " ".join(parts)
+
+
+def _is_maturin_project(data:dict) -> bool:
+    build_backend = nested_idx(data, "build-system", "build-backend") or ""
+    return "maturin" in build_backend or bool(nested_idx(data, "tool", "maturin"))
+
+
+def _cargo_bins(manifest:Path) -> list[str]:
+    "Read explicit `[[bin]]` names from Cargo.toml."
+    data = _load_toml(manifest)
+    return [o["name"] for o in data.get("bin", []) if o.get("name")]
+
+
+def _cargo_version(manifest:Path) -> str:
+    "Read `[package].version` from Cargo.toml."
+    ver = (_load_toml(manifest).get("package") or {}).get("version")
+    if not ver: raise ValueError(f"Could not find [package].version in {manifest}")
+    return ver
+
+
+def _fmt_toml_val(v):
+    if isinstance(v, list): return "[" + ", ".join(f'"{o}"' for o in v) + "]"
+    return f'"{v}"'
+
+
+def _toml_section_bounds(lines:list[str], section:str):
+    hdr = f"[{section}]"
+    start = next((i for i, ln in enumerate(lines) if ln.strip() == hdr), None)
+    if start is None: return None, None
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"^\s*\[.*\]\s*$", lines[i])), len(lines))
+    return start, end
+
+
+def _ensure_toml_section(p:Path, section:str, items:dict, replace:bool = False):
+    "Ensure a TOML section contains key/value pairs, preserving existing keys unless `replace`."
+    lines = p.read_text(encoding="utf-8").splitlines()
+    start, end = _toml_section_bounds(lines, section)
+    if start is None:
+        if lines and lines[-1].strip(): lines.append("")
+        lines += [f"[{section}]"] + [f"{k} = {_fmt_toml_val(v)}" for k, v in items.items()]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    existing = {}
+    for i in range(start + 1, end):
+        m = re.match(r"^(\s*([A-Za-z0-9_-]+)\s*=\s*).*$", lines[i])
+        if m: existing[m.group(2)] = i
+    inserts = []
+    for k, v in items.items():
+        val = f"{k} = {_fmt_toml_val(v)}"
+        if k in existing:
+            if replace: lines[existing[k]] = val
+        else: inserts.append(val)
+    if inserts: lines[end:end] = inserts
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _ensure_project_dynamic_version(p:Path):
+    "Make `[project]` use maturin's Cargo.toml-derived version."
+    data = _load_toml(p)
+    proj = data.get("project") or {}
+    dyn = proj.get("dynamic") or []
+    if not isinstance(dyn, list): raise ValueError(f"{p} [project].dynamic must be a list")
+    if "version" not in dyn: dyn.append("version")
+
+    lines = p.read_text(encoding="utf-8").splitlines()
+    start, end = _toml_section_bounds(lines, "project")
+    if start is None: raise ValueError(f"Could not find [project] in {p}")
+
+    for i in range(end - 1, start, -1):
+        if re.match(r"^\s*version\s*=", lines[i]):
+            del lines[i]
+            end -= 1
+
+    dynamic_range = None
+    name_idx = None
+    for i in range(start + 1, end):
+        if re.match(r"^\s*dynamic\s*=", lines[i]):
+            j = i + 1
+            if "[" in lines[i] and "]" not in lines[i]:
+                while j < end and "]" not in lines[j]: j += 1
+                j = min(j + 1, end)
+            dynamic_range = (i, j)
+        if re.match(r"^\s*name\s*=", lines[i]): name_idx = i
+    val = f"dynamic = {_fmt_toml_val(dyn)}"
+    if dynamic_range is not None: lines[dynamic_range[0]:dynamic_range[1]] = [val]
+    else: lines.insert((name_idx or start) + 1, val)
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _rs_module_name(data:dict) -> str | None:
+    mod = nested_idx(data, "tool", "maturin", "module-name") or nested_idx(data, "project", "name")
+    return _norm_mod(mod.rsplit(".", 1)[-1]) if mod else None
+
+
+def _warn(msg:str): print(f"ship-rs-init: warning: {msg}", file=sys.stderr)
+
+
+def _ensure_rs_runtime_version(root:Path, data:dict):
+    "Expose Cargo.toml's version as `__version__` in the PyO3 module."
+    mod = _rs_module_name(data)
+    if not mod:
+        _warn("could not infer PyO3 module name; skipped Rust __version__ export")
+        return
+    pat = re.compile(rf"^\s*fn\s+{re.escape(mod)}\s*\(\s*(\w+)\s*:", re.MULTILINE)
+    found = False
+    for p in (root / "src").rglob("*.rs"):
+        txt = p.read_text(encoding="utf-8")
+        m = pat.search(txt)
+        if not m: continue
+        found = True
+        if "__version__" in txt[m.start():]: return
+        ok = txt.find("\n    Ok(())", m.end())
+        if ok < 0: continue
+        txt = txt[:ok] + f'\n    {m.group(1)}.add("__version__", env!("CARGO_PKG_VERSION"))?;' + txt[ok:]
+        p.write_text(txt, encoding="utf-8")
+        return
+    if found: _warn(f"found PyO3 module `{mod}` but could not find a simple `Ok(())`; skipped Rust __version__ export")
+    else: _warn(f"could not find PyO3 module function `fn {mod}(...)`; skipped Rust __version__ export")
+
+
+def _ensure_py_runtime_version(root:Path, data:dict):
+    "Re-export extension-module `__version__` from a Python package wrapper."
+    mod = nested_idx(data, "tool", "maturin", "module-name")
+    if not mod or "." not in mod: return
+    pkg, ext = mod.rsplit(".", 1)
+    init = root / (nested_idx(data, "tool", "maturin", "python-source") or "python") / pkg / _init
+    if not init.exists(): return
+    txt = init.read_text(encoding="utf-8")
+    if not _re_version_any.search(txt): return
+
+    lines = [ln for ln in txt.splitlines() if not _re_version_any.match(ln)]
+    import_pat = re.compile(rf"^from\s+({re.escape(pkg + '.' + ext)}|\.{re.escape(ext)})\s+import\s+(.+)$")
+    for i, ln in enumerate(lines):
+        m = import_pat.match(ln)
+        if not m: continue
+        names = [o.strip() for o in m.group(2).split(",")]
+        if "__version__" not in names: names.insert(0, "__version__")
+        lines[i] = f"from {m.group(1)} import {', '.join(names)}"
+        init.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    _warn(f"found literal __version__ in {init} but could not find a simple import from `{pkg}.{ext}`; left Python wrapper unchanged")
+
+
+def _init_rs_config(root:Path, branch:str = None, force:bool = False):
+    pyproj = _find_pyproject(root)
+    data = _load_toml(pyproj)
+    if not _is_maturin_project(data): raise SystemExit(f"{pyproj} does not look like a maturin project")
+    manifest = pyproj.parent / "Cargo.toml"
+    if not manifest.exists(): raise SystemExit(f"Missing {manifest}")
+    _ensure_project_dynamic_version(pyproj)
+    _ensure_rs_runtime_version(root, data)
+    _ensure_py_runtime_version(root, data)
+    maturin = nested_idx(data, "tool", "maturin") or {}
+    data_scripts = str(Path(maturin["data"]) / "scripts") if maturin.get("data") else None
+    branch = branch or nested_idx(data, "tool", "fastship", "branch") or _git_branch()
+    _ensure_toml_section(pyproj, "tool.fastship", dict(branch=branch), replace=force)
+    items = dict(bins=_cargo_bins(manifest))
+    if data_scripts: items["data_scripts"] = data_scripts
+    _ensure_toml_section(pyproj, "tool.fastship.rs", items, replace=force)
+    return pyproj
+
+
+def _update_rs_ci(root:Path):
+    wf = root / ".github" / "workflows" / "ci.yml"
+    if not wf.exists(): return None
+    txt = wf.read_text(encoding="utf-8")
+    txt = txt.replace("- run: tools/build.sh release", "- run: ship-rs-prep --release")
+    txt = txt.replace("- run: tools/build.sh", "- run: ship-rs-prep")
+    if "ship-rs-prep" in txt and "pip install fastship" not in txt:
+        lines, inserted = txt.splitlines(), False
+        out = []
+        for ln in lines:
+            if not inserted and re.search(r"- run: ship-rs-prep(\s|$)", ln):
+                out.append(f"{ln.split('- run:', 1)[0]}- run: pip install fastship")
+                inserted = True
+            out.append(ln)
+        txt = "\n".join(out) + ("\n" if txt.endswith("\n") else "")
+    wf.write_text(txt, encoding="utf-8")
+    return wf
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +704,21 @@ def ship_release(
 
 
 @call_parse
+def ship_rs_init(
+    branch: str = None,   # Branch for [tool.fastship] (defaults to existing/current)
+    ci: bool = False,     # Update .github/workflows/ci.yml to call ship-rs-prep
+    force: bool = False,  # Replace existing [tool.fastship] / [tool.fastship.rs] keys
+):
+    "Configure an existing maturin/PyO3 project for fastship Rust commands."
+    root = _find_pyproject().parent
+    pyproj = _init_rs_config(root, branch=branch, force=force)
+    print(f"Updated {pyproj}")
+    if ci:
+        wf = _update_rs_ci(root)
+        if wf: print(f"Updated {wf}")
+
+
+@call_parse
 def ship_rs_prep(
     release: bool = False,  # Build bins with `cargo build --release`
     target: str = None,     # Optional Rust target triple
@@ -566,11 +762,10 @@ def ship_rs_bump(
     part: int = 2,          # Part of version to bump (0=major, 1=minor, 2=patch)
     unbump: bool = False,   # Reduce version instead of increasing it
 ):
-    "Bump `[project].version` in pyproject.toml and `[package].version` in Cargo.toml."
+    "Bump `[package].version` in Cargo.toml."
     cfg = get_rs_config()
     old = cfg.version
     new = bump_version(old, part=part, unbump=unbump)
-    _replace_toml_section_key(cfg.pyproject, "project", "version", new)
     _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
     print(f"{old} -> {new}")
 
@@ -602,9 +797,24 @@ def _slugify_pkg(name:str)->str:
     if re.match(r"^\d", pkg): pkg = "pkg_" + pkg
     return pkg
 
+def _slugify_dist(name:str)->str:
+    "Best-effort convert a project name to a PyPI/Cargo-style distribution name."
+    dist = name.strip().lower().replace("_", "-").replace(" ", "-")
+    dist = re.sub(r"[^0-9a-zA-Z-]", "-", dist)
+    dist = re.sub(r"-+", "-", dist).strip("-")
+    if not dist: dist = "pkg"
+    if re.match(r"^\d", dist): dist = "pkg-" + dist
+    return dist
+
 def _write(p:Path, s:str):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8")
+
+def _prepare_new_root(root:Path, force:bool = False):
+    if root.exists():
+        if not force: raise FileExistsError(f"{root} already exists (use force=True to overwrite)")
+        shutil.rmtree(root)
+    return root
 
 def _template_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return f"""[build-system]
@@ -682,6 +892,7 @@ def _template_gitignore()->str:
 *.so
 *.egg-info/
 tags
+target/
 dist/
 build/
 .venv/
@@ -701,6 +912,269 @@ def _read_license():
     "Read the Apache 2.0 license from the package."
     return importlib.resources.files("fastship").joinpath("LICENSE").read_text(encoding="utf-8")
 
+def _template_rs_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
+    return f"""[build-system]
+requires = [\"maturin>=1.0,<2.0\"]
+build-backend = \"maturin\"
+
+[project]
+name = \"{proj_name}\"
+dynamic = [\"version\"]
+description = \"{desc}\"
+license = {{text = \"Apache-2.0\"}}
+requires-python = \">=3.10\"
+readme = \"README.md\"
+authors = [{{name = \"{proj_name} contributors\"}}]
+classifiers = [
+    \"Programming Language :: Rust\",
+    \"Programming Language :: Python :: Implementation :: CPython\",
+]
+
+[project.optional-dependencies]
+dev = [\"fastship\", \"maturin>=1.0,<2.0\", \"pytest\"]
+
+[project.urls]
+Homepage = \"https://github.com/{gh_org}/{proj_name}\"
+Repository = \"https://github.com/{gh_org}/{proj_name}\"
+Issues = \"https://github.com/{gh_org}/{proj_name}/issues\"
+
+[tool.maturin]
+features = [\"extension-module\"]
+python-source = \"python\"
+module-name = \"{pkg_name}._core\"
+
+[tool.fastship]
+branch = \"main\"
+
+[tool.pytest.ini_options]
+testpaths = [\"tests\"]
+"""
+
+def _template_cargo_toml(proj_name:str, pkg_name:str, desc:str)->str:
+    return f"""[package]
+name = \"{proj_name}\"
+version = \"0.1.0\"
+edition = \"2021\"
+license = \"Apache-2.0\"
+description = \"{desc}\"
+
+[lib]
+name = \"{pkg_name}\"
+crate-type = [\"cdylib\", \"rlib\"]
+
+[dependencies]
+pyo3 = {{ version = \">=0.28\", optional = true }}
+
+[features]
+extension-module = [\"pyo3\", \"pyo3/extension-module\"]
+"""
+
+def _template_rs_lib()->str:
+    return """pub fn hello(name: &str) -> String {
+    format!("Hello, {name}!")
+}
+
+#[cfg(feature = "pyo3")]
+use pyo3::prelude::*;
+
+#[cfg(feature = "pyo3")]
+#[pyfunction(name = "hello")]
+fn py_hello(name: &str) -> String {
+    hello(name)
+}
+
+#[cfg(feature = "pyo3")]
+#[pymodule]
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(py_hello, m)?)?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hello_returns_greeting() {
+        assert_eq!(hello("Rust"), "Hello, Rust!");
+    }
+}
+"""
+
+def _template_rs_init()->str:
+    return """from ._core import __version__, hello
+
+__all__ = ["__version__", "hello"]
+"""
+
+def _template_rs_test(pkg_name:str)->str:
+    return f"""from {pkg_name} import hello
+
+def test_hello():
+    assert hello("fastship") == "Hello, fastship!"
+"""
+
+def _template_rs_readme(proj_name:str)->str:
+    return f"""# {proj_name}
+
+PyO3/maturin package scaffolded by fastship.
+
+## Development
+
+```bash
+pip install -e .[dev]
+ship-rs-test
+```
+
+## Build
+
+```bash
+ship-rs-build
+```
+
+## Release
+
+Release flow is: release first, then bump.
+
+```bash
+ship-rs-test
+ship-rs-release
+ship-rs-bump
+```
+
+The GitHub workflow builds wheels on tags matching `v*` and publishes them to GitHub Releases and PyPI.
+"""
+
+def _template_rs_dev()->str:
+    return """# Development
+
+## Commands
+
+```bash
+ship-rs-test
+ship-rs-build
+```
+
+## Versioning
+
+The canonical version lives in `Cargo.toml`. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.
+
+## Release
+
+Release flow is: release first, then bump.
+
+1. Run `ship-rs-test`.
+2. Confirm the release version in `Cargo.toml` (`[package].version`).
+3. Run `ship-rs-release`.
+4. After pushing the release tag, run `ship-rs-bump`, commit the `Cargo.toml` version bump, and push to `main` without a tag.
+"""
+
+def _template_rs_workflow()->str:
+    return """name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install fastship maturin pytest
+      - run: ship-rs-test
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.10', '3.11', '3.12', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-py${{ matrix.python }}
+          path: dist/*.whl
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: -o dist
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+"""
+
+@call_parse
+def _create_rs_project(name:str, package:str = None, description:str = "A PyO3 package", path:str = ".", gh_org:str = "AnswerDotAI", force:bool = False):
+    "Create a maturin/PyO3 project and return its root."
+    proj = _slugify_dist(name)
+    pkg = package or _slugify_pkg(proj)
+    root = _prepare_new_root(Path(path) / proj, force)
+
+    _write(root/"pyproject.toml", _template_rs_pyproject(proj, pkg, description, gh_org))
+    _write(root/"Cargo.toml", _template_cargo_toml(proj, pkg, description))
+    _write(root/"src"/"lib.rs", _template_rs_lib())
+    _write(root/"python"/pkg/"__init__.py", _template_rs_init())
+    _write(root/"tests"/"test_basic.py", _template_rs_test(pkg))
+    _write(root/"README.md", _template_rs_readme(proj))
+    _write(root/"DEV.md", _template_rs_dev())
+    _write(root/"LICENSE", _read_license())
+    _write(root/".gitignore", _template_gitignore())
+    _write(root/".github"/"workflows"/"ci.yml", _template_rs_workflow())
+    return root
+
+@call_parse
+def ship_rs_new(
+    name: str,              # Project name (PyPI/Cargo name), e.g. "my-project"
+    package: str = None,    # Python package import name, e.g. "my_project" (defaults from `name`)
+    description: str = "A PyO3 package",  # Short project description
+    path: str = ".",        # Directory to create the project folder in
+    gh_org: str = "AnswerDotAI",  # GitHub organization for project.urls
+    force: bool = False,    # Overwrite if the folder already exists
+):
+    "Create a maturin/PyO3 project wired for fastship Rust commands."
+    root = _create_rs_project(name, package=package, description=description, path=path, gh_org=gh_org, force=force)
+
+    print(f"Created {root}")
+    print(f"Next:\n  cd {root}")
+    print("  pip install -e .[dev]")
+    print("  ship-rs-test")
+
 @call_parse
 def ship_new(
     name: str,              # Project name (PyPI name), e.g. "my-project"
@@ -712,10 +1186,7 @@ def ship_new(
 ):
     "Create a modern setuptools project wired for fastship."
     pkg = package or _slugify_pkg(name)
-    root = Path(path) / name
-    if root.exists():
-        if not force: raise FileExistsError(f"{root} already exists (use force=True to overwrite)")
-        shutil.rmtree(root)
+    root = _prepare_new_root(Path(path) / name, force)
 
     _write(root/"pyproject.toml", _template_pyproject(name, pkg, description, gh_org))
     _write(root/"README.md", _template_readme(name, pkg))

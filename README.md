@@ -64,6 +64,23 @@ ship-pypi --quiet
 
 Fastship can also handle the repeated local tooling for PyO3 projects that use maturin and need Rust CLI binaries bundled into wheel scripts.
 
+Create a new PyO3 project:
+
+```bash
+ship-rs-new my-project
+cd my-project
+pip install -e .[dev]
+ship-rs-test
+```
+
+Use `Cargo.toml` as the version source:
+
+```toml
+[project]
+name = "my_project"
+dynamic = ["version"]
+```
+
 Configure the native bins once:
 
 ```toml
@@ -77,12 +94,17 @@ If `data_scripts` is omitted, fastship uses `[tool.maturin].data` plus `/scripts
 Commands:
 
 ```bash
+ship-rs-new my-project  # create a new maturin/PyO3 project
+ship-rs-init            # configure an existing maturin/PyO3 project
+ship-rs-init --ci       # also update CI build step to call ship-rs-prep
 ship-rs-prep --release   # cargo build --release --bins, copy bins into .data/scripts
 ship-rs-build            # prep bins, then maturin build --release -o dist
 ship-rs-test             # cargo test, prep debug bins, maturin develop, pytest -q
-ship-rs-bump             # bump [project].version and Cargo.toml [package].version
+ship-rs-bump             # bump Cargo.toml [package].version
 ship-rs-release          # tag v<version> and push branch + tags
 ```
+
+`ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module, infers `bins` from explicit `[[bin]]` entries in `Cargo.toml`, and infers `data_scripts` from `[tool.maturin].data`.
 
 ### `ship-pr`
 
