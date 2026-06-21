@@ -514,7 +514,8 @@ def _init_rs_config(root:Path, branch:str = None, force:bool = False):
     data_scripts = str(Path(maturin["data"]) / "scripts") if maturin.get("data") else None
     branch = branch or nested_idx(data, "tool", "fastship", "branch") or _git_branch()
     _ensure_toml_section(pyproj, "tool.fastship", dict(branch=branch), replace=force)
-    items = dict(bins=_cargo_bins(manifest))
+    bins = _cargo_bins(manifest)
+    items = dict(bins=bins) if bins else {}
     if data_scripts: items["data_scripts"] = data_scripts
     _ensure_toml_section(pyproj, "tool.fastship.rs", items, replace=force)
     return pyproj
@@ -1093,41 +1094,65 @@ jobs:
       - run: pip install -e '.[dev]'
       - run: ship-rs-test
 
-  build:
+  linux:
     needs: test
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        python: ['3.10', '3.11', '3.12', '3.13']
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
+          manylinux: auto
+          before-script-linux: |
+            python3.13 -m pip install 'fastship>=0.0.11'
+            ship-rs-prep --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux
+          path: dist
+
+  macos:
+    needs: test
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: '3.13'
+      - run: python -m pip install 'fastship>=0.0.11'
+      - run: ship-rs-prep --release
       - uses: PyO3/maturin-action@v1
         with:
-          command: build
-          args: --release -o dist
+          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-py${{ matrix.python }}
-          path: dist/*.whl
+          name: wheels-macos
+          path: dist
 
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+  sdist:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist

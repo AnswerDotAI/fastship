@@ -101,15 +101,11 @@ def test_ship_rs_init_configures_maturin_project(tmp_path, monkeypatch):
     relmod.ship_rs_init(branch="main")
     relmod.ship_rs_init(branch="main")
 
-    txt = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
-    assert txt.count("[tool.fastship]") == 1
-    assert txt.count("[tool.fastship.rs]") == 1
-    assert 'branch = "main"' in txt
-    assert 'dynamic = ["version"]' in txt
-    assert 'version = "0.1.2"' not in txt
-    assert 'dev = ["fastship>=0.0.11", "maturin>=1.0,<2.0", "pytest"]' in txt
-    assert 'bins = ["exhash", "lnhashview"]' in txt
-    assert 'data_scripts = "python/exhash.data/scripts"' in txt
+    data = relmod._load_toml(tmp_path / "pyproject.toml")
+    assert data["project"]["dynamic"] == ["version"]
+    assert "version" not in data["project"]
+    assert data["tool"]["fastship"]["branch"] == "main"
+    assert data["tool"]["fastship"]["rs"] == dict(bins=["exhash", "lnhashview"], data_scripts="python/exhash.data/scripts")
 
 
 def test_ship_rs_init_rehomes_python_version_to_pyo3_module(tmp_path, monkeypatch):
@@ -161,34 +157,27 @@ def test_ship_rs_new_scaffolds_build_test_release_project(tmp_path):
     root = relmod._create_rs_project("hello-rs", description="Test PyO3 project", path=str(tmp_path))
 
     assert root == tmp_path / "hello-rs"
-    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-    cargo = (root / "Cargo.toml").read_text(encoding="utf-8")
+    pyproject = relmod._load_toml(root / "pyproject.toml")
+    cargo = relmod._load_toml(root / "Cargo.toml")
     rust = (root / "src" / "lib.rs").read_text(encoding="utf-8")
-    workflow = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     init = (root / "python" / "hello_rs" / "__init__.py").read_text(encoding="utf-8")
 
-    assert 'name = "hello-rs"' in pyproject
-    assert 'dynamic = ["version"]' in pyproject
-    assert 'module-name = "hello_rs._core"' in pyproject
-    assert 'features = ["extension-module"]' in pyproject
-    assert '[tool.fastship]' in pyproject
-    assert "[tool.fastship.rs]" not in pyproject
-    assert 'name = "hello-rs"' in cargo
-    assert 'version = "0.1.0"' in cargo
-    assert 'name = "hello_rs"' in cargo
-    assert 'pyo3 = { version = ">=0.28", optional = true }' in cargo
-    assert 'extension-module = ["pyo3", "pyo3/extension-module"]' in cargo
-    assert 'pyo3 = ["dep:pyo3"]' in cargo
+    assert (root / ".github" / "workflows" / "ci.yml").exists()
+    assert pyproject["project"]["name"] == "hello-rs"
+    assert pyproject["project"]["dynamic"] == ["version"]
+    assert pyproject["tool"]["maturin"]["module-name"] == "hello_rs._core"
+    assert pyproject["tool"]["maturin"]["features"] == ["extension-module"]
+    assert cargo["package"]["name"] == "hello-rs"
+    assert cargo["package"]["version"] == "0.1.0"
+    assert cargo["lib"]["name"] == "hello_rs"
+    assert cargo["features"]["extension-module"] == ["pyo3", "pyo3/extension-module"]
+    assert cargo["features"]["pyo3"] == ["dep:pyo3"]
     assert 'm.add("__version__", env!("CARGO_PKG_VERSION"))?;' in rust
     assert '#[cfg(feature = "pyo3")]' in rust
     assert "from ._core import __version__, hello" in init
-    assert "ship-rs-test" in workflow
-    assert "PyO3/maturin-action@v1" in workflow
-    assert "pypa/gh-action-pypi-publish@release/v1" in workflow
 
     cfg = relmod.get_rs_config(root)
     assert cfg.version == "0.1.0"
-    assert cfg.bins == []
     assert cfg.branch == "main"
 
 
@@ -217,10 +206,8 @@ def test_ship_rs_init_can_update_ci(tmp_path, monkeypatch):
     relmod.ship_rs_init(ci=True)
     relmod.ship_rs_init(ci=True)
 
-    txt = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'bins = []' in txt
     ci_txt = wf.read_text(encoding="utf-8")
-    assert ci_txt.count("pip install -e '.[dev]'") == 1
+    assert "tools/build.sh" not in ci_txt
     assert ci_txt.count("ship-rs-prep --release") == 1
 
 

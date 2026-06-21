@@ -106,6 +106,8 @@ ship-rs-release          # tag v<version> and push branch + tags
 
 `ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module, infers `bins` from explicit `[[bin]]` entries in `Cargo.toml`, and infers `data_scripts` from `[tool.maturin].data`.
 
+Generated CI builds Linux wheels with `maturin-action` and `manylinux: auto`. The Linux prep step runs inside the manylinux container via `before-script-linux`; macOS runs the same prep before the host build.
+
 ### `ship-pr`
 
 Create a PR from uncommitted or unpushed work, merge it immediately, and clean up:
