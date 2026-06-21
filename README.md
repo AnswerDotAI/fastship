@@ -88,7 +88,7 @@ ship-rs-new my-project  # create a new maturin/PyO3 project
 ship-rs-init            # configure an existing maturin/PyO3 project
 ship-rs-build            # maturin build --release -o dist
 ship-rs-test             # build/install wheel, pytest -q
-ship-rs-bump             # bump Cargo.toml [package].version
+ship-rs-bump             # bump Cargo.toml version, then refresh the local editable install
 ship-rs-release          # tag v<version> and push branch + tags
 ```
 

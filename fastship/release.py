@@ -688,12 +688,14 @@ def ship_rs_test_cli(
 
 
 def ship_rs_bump(part: int = 2, unbump: bool = False):
-    "Bump `[package].version` in Cargo.toml."
+    "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
     cfg = get_rs_config()
     old = cfg.version
     new = bump_version(old, part=part, unbump=unbump)
     _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
     print(f"{old} -> {new}")
+    os.chdir(cfg.root)
+    run("maturin develop")
 
 
 @call_parse
@@ -701,7 +703,7 @@ def ship_rs_bump_cli(
     part: int = 2,          # Part of version to bump (0=major, 1=minor, 2=patch)
     unbump: bool = False,   # Reduce version instead of increasing it
 ):
-    "Bump `[package].version` in Cargo.toml."
+    "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
     return ship_rs_bump(part=part, unbump=unbump)
 
 
