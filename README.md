@@ -99,7 +99,7 @@ ship-rs-init            # configure an existing maturin/PyO3 project
 ship-rs-init --ci       # also update CI build step to call ship-rs-prep
 ship-rs-prep --release   # cargo build --release --bins, copy bins into .data/scripts
 ship-rs-build            # prep bins, then maturin build --release -o dist
-ship-rs-test             # cargo test, prep debug bins, maturin develop, pytest -q
+ship-rs-test             # cargo test, prep debug bins, build/install wheel, pytest -q
 ship-rs-bump             # bump Cargo.toml [package].version
 ship-rs-release          # tag v<version> and push branch + tags
 ```

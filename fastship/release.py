@@ -8,9 +8,11 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
     "ship_bump", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
-    "ship_rs_new", "ship_rs_init", "ship_rs_prep", "ship_rs_build", "ship_rs_test", "ship_rs_bump", "ship_rs_release"]
+    "ship_rs_new", "ship_rs_new_cli", "ship_rs_init", "ship_rs_init_cli", "ship_rs_prep", "ship_rs_prep_cli",
+    "ship_rs_build", "ship_rs_build_cli", "ship_rs_test", "ship_rs_test_cli", "ship_rs_bump", "ship_rs_bump_cli",
+    "ship_rs_release", "ship_rs_release_cli"]
 
-import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, stat
+import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, stat, tempfile
 from dataclasses import dataclass
 
 try: import tomllib
@@ -705,12 +707,7 @@ def ship_release(
     run("git push")
 
 
-@call_parse
-def ship_rs_init(
-    branch: str = None,   # Branch for [tool.fastship] (defaults to existing/current)
-    ci: bool = False,     # Update .github/workflows/ci.yml to call ship-rs-prep
-    force: bool = False,  # Replace existing [tool.fastship] / [tool.fastship.rs] keys
-):
+def ship_rs_init(branch: str = None, ci: bool = False, force: bool = False):
     "Configure an existing maturin/PyO3 project for fastship Rust commands."
     root = _find_pyproject().parent
     pyproj = _init_rs_config(root, branch=branch, force=force)
@@ -721,10 +718,16 @@ def ship_rs_init(
 
 
 @call_parse
-def ship_rs_prep(
-    release: bool = False,  # Build bins with `cargo build --release`
-    target: str = None,     # Optional Rust target triple
+def ship_rs_init_cli(
+    branch: str = None,   # Branch for [tool.fastship] (defaults to existing/current)
+    ci: bool = False,     # Update .github/workflows/ci.yml to call ship-rs-prep
+    force: bool = False,  # Replace existing [tool.fastship] / [tool.fastship.rs] keys
 ):
+    "Configure an existing maturin/PyO3 project for fastship Rust commands."
+    return ship_rs_init(branch=branch, ci=ci, force=force)
+
+
+def ship_rs_prep(release: bool = False, target: str = None):
     "Build configured Rust CLI bins and copy them into maturin .data/scripts."
     cfg = get_rs_config()
     copied = _copy_rs_bins(cfg, release=release, target=target)
@@ -732,12 +735,15 @@ def ship_rs_prep(
 
 
 @call_parse
-def ship_rs_build(
-    release: bool = True,  # Build release wheels by default
-    target: str = None,    # Optional Rust target triple
-    outdir: str = "dist",  # Wheel output directory
-    args: str = "",        # Extra arguments appended to `maturin build`
+def ship_rs_prep_cli(
+    release: bool = False,  # Build bins with `cargo build --release`
+    target: str = None,     # Optional Rust target triple
 ):
+    "Build configured Rust CLI bins and copy them into maturin .data/scripts."
+    return ship_rs_prep(release=release, target=target)
+
+
+def ship_rs_build(release: bool = True, target: str = None, outdir: str = "dist", args: str = ""):
     "Prepare configured Rust CLI bins, then build wheels with maturin."
     cfg = get_rs_config()
     os.chdir(cfg.root)
@@ -746,24 +752,41 @@ def ship_rs_build(
 
 
 @call_parse
-def ship_rs_test(
-    target: str = None,      # Optional Rust target triple for bin prep/develop
-    pytest_args: str = "-q", # Arguments passed to pytest
+def ship_rs_build_cli(
+    release: bool = True,  # Build release wheels by default
+    target: str = None,    # Optional Rust target triple
+    outdir: str = "dist",  # Wheel output directory
+    args: str = "",        # Extra arguments appended to `maturin build`
 ):
-    "Run cargo tests, install the PyO3 module with maturin develop, then run pytest."
+    "Prepare configured Rust CLI bins, then build wheels with maturin."
+    return ship_rs_build(release=release, target=target, outdir=outdir, args=args)
+
+
+def ship_rs_test(target: str = None, pytest_args: str = "-q"):
+    "Run cargo tests, install a local wheel, then run pytest."
     cfg = get_rs_config()
     os.chdir(cfg.root)
     run("cargo test")
     _copy_rs_bins(cfg, release=False, target=target)
-    run(_maturin_cmd("develop", target=target))
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        run(_maturin_cmd("build", target=target, outdir=out))
+        wheels = list(out.glob("*.whl"))
+        if len(wheels) != 1: raise RuntimeError(f"Expected one wheel from maturin build, found {len(wheels)} in {out}")
+        run(f"{sys.executable} -m pip install --force-reinstall {_q(wheels[0])}")
     run(f"pytest {pytest_args}")
 
 
 @call_parse
-def ship_rs_bump(
-    part: int = 2,          # Part of version to bump (0=major, 1=minor, 2=patch)
-    unbump: bool = False,   # Reduce version instead of increasing it
+def ship_rs_test_cli(
+    target: str = None,      # Optional Rust target triple for bin prep/build
+    pytest_args: str = "-q", # Arguments passed to pytest
 ):
+    "Run cargo tests, install a local wheel, then run pytest."
+    return ship_rs_test(target=target, pytest_args=pytest_args)
+
+
+def ship_rs_bump(part: int = 2, unbump: bool = False):
     "Bump `[package].version` in Cargo.toml."
     cfg = get_rs_config()
     old = cfg.version
@@ -773,10 +796,15 @@ def ship_rs_bump(
 
 
 @call_parse
-def ship_rs_release(
-    remote: str = "origin", # Git remote to push
-    branch: str = None,     # Branch to push (defaults to [tool.fastship].branch/current branch)
+def ship_rs_bump_cli(
+    part: int = 2,          # Part of version to bump (0=major, 1=minor, 2=patch)
+    unbump: bool = False,   # Reduce version instead of increasing it
 ):
+    "Bump `[package].version` in Cargo.toml."
+    return ship_rs_bump(part=part, unbump=unbump)
+
+
+def ship_rs_release(remote: str = "origin", branch: str = None):
     "Tag `v<version>` and push branch plus tags, leaving CI to build/publish wheels."
     cfg = get_rs_config()
     os.chdir(cfg.root)
@@ -784,6 +812,15 @@ def ship_rs_release(
     run(f"git tag v{cfg.version}")
     run(f"git push {remote} {branch} --tags")
     print(f"Released v{cfg.version}")
+
+
+@call_parse
+def ship_rs_release_cli(
+    remote: str = "origin", # Git remote to push
+    branch: str = None,     # Branch to push (defaults to [tool.fastship].branch/current branch)
+):
+    "Tag `v<version>` and push branch plus tags, leaving CI to build/publish wheels."
+    return ship_rs_release(remote=remote, branch=branch)
 
 
 # ---------------------------------------------------------------------------
@@ -1185,8 +1222,18 @@ def _create_rs_project(name:str, package:str = None, description:str = "A PyO3 p
     _write(root/".github"/"workflows"/"ci.yml", _template_rs_workflow())
     return root
 
+def ship_rs_new(name: str, package: str = None, description: str = "A PyO3 package", path: str = ".", gh_org: str = "AnswerDotAI", force: bool = False):
+    "Create a maturin/PyO3 project wired for fastship Rust commands."
+    root = _create_rs_project(name, package=package, description=description, path=path, gh_org=gh_org, force=force)
+
+    print(f"Created {root}")
+    print(f"Next:\n  cd {root}")
+    print("  pip install -e .[dev]")
+    print("  ship-rs-test")
+
+
 @call_parse
-def ship_rs_new(
+def ship_rs_new_cli(
     name: str,              # Project name (PyPI/Cargo name), e.g. "my-project"
     package: str = None,    # Python package import name, e.g. "my_project" (defaults from `name`)
     description: str = "A PyO3 package",  # Short project description
@@ -1195,12 +1242,8 @@ def ship_rs_new(
     force: bool = False,    # Overwrite if the folder already exists
 ):
     "Create a maturin/PyO3 project wired for fastship Rust commands."
-    root = _create_rs_project(name, package=package, description=description, path=path, gh_org=gh_org, force=force)
+    return ship_rs_new(name, package=package, description=description, path=path, gh_org=gh_org, force=force)
 
-    print(f"Created {root}")
-    print(f"Next:\n  cd {root}")
-    print("  pip install -e .[dev]")
-    print("  ship-rs-test")
 
 @call_parse
 def ship_new(

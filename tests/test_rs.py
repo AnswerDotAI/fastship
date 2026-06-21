@@ -94,6 +94,31 @@ def test_copy_rs_bins_builds_and_copies_configured_scripts(tmp_path, monkeypatch
     assert [p.read_text(encoding="utf-8") for p in copied] == ["exhash", "lnhashview"]
 
 
+def test_ship_rs_test_installs_built_wheel(tmp_path, monkeypatch):
+    _make_rs_project(tmp_path, configured=False, bins=False)
+    cmds = []
+
+    def fake_run(cmd):
+        cmds.append(cmd)
+        if cmd.startswith("maturin build"):
+            out = Path(cmd.rsplit(" -o ", 1)[1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "exhash-0.1.2-py3-none-any.whl").write_text("", encoding="utf-8")
+        return ""
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "_git_branch", lambda: "main")
+    monkeypatch.setattr(relmod, "run", fake_run)
+
+    relmod.ship_rs_test()
+
+    assert cmds[0] == "cargo test"
+    assert any(cmd.startswith("maturin build") for cmd in cmds)
+    assert not any("maturin develop" in cmd for cmd in cmds)
+    assert any(" -m pip install --force-reinstall " in cmd for cmd in cmds)
+    assert cmds[-1] == "pytest -q"
+
+
 def test_ship_rs_init_configures_maturin_project(tmp_path, monkeypatch):
     _make_rs_project(tmp_path, configured=False, dynamic=False)
     monkeypatch.chdir(tmp_path)
