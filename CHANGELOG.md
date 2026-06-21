@@ -2,6 +2,14 @@
 
 <!-- do not remove -->
 
+## 0.0.13
+
+### New Features
+
+- Split Rust CI into platform-specific jobs and refactor tests to use structured TOML assertions ([#15](https://github.com/AnswerDotAI/fastship/issues/15))
+- Add explicit pyo3 feature mapping to dep:pyo3 in Cargo template ([#14](https://github.com/AnswerDotAI/fastship/issues/14))
+
+
 ## 0.0.12
 
 ### New Features
