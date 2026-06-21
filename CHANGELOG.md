@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.14
+
+### New Features
+
+- Split `ship_rs_`* functions into callable core + CLI wrappers; replace maturin develop with wheel build/install in `ship_rs_test` ([#16](https://github.com/AnswerDotAI/fastship/issues/16))
+
+
 ## 0.0.13
 
 ### New Features
