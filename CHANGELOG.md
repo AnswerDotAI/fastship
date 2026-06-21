@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.0.15
+
+### New Features
+
+- Remove native Rust binary bundling and ship-rs-prep; simplify Rust workflow to maturin-only builds ([#17](https://github.com/AnswerDotAI/fastship/issues/17))
+
+
 ## 0.0.14
 
 ### New Features
