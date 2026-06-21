@@ -8,11 +8,11 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
     "ship_bump", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
-    "ship_rs_new", "ship_rs_new_cli", "ship_rs_init", "ship_rs_init_cli", "ship_rs_prep", "ship_rs_prep_cli",
+    "ship_rs_new", "ship_rs_new_cli", "ship_rs_init", "ship_rs_init_cli",
     "ship_rs_build", "ship_rs_build_cli", "ship_rs_test", "ship_rs_test_cli", "ship_rs_bump", "ship_rs_bump_cli",
     "ship_rs_release", "ship_rs_release_cli"]
 
-import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, stat, tempfile
+import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, tempfile
 from dataclasses import dataclass
 
 try: import tomllib
@@ -177,8 +177,6 @@ class RustConfig:
     pyproject: Path
     data: dict
     manifest_path: Path
-    bins: list[str]
-    data_scripts: Path | None
     branch: str
 
     @property
@@ -215,14 +213,9 @@ def get_rs_config(start: str | Path | None = None) -> RustConfig:
     if not isinstance(dyn, list) or "version" not in dyn: raise ValueError(f'{pyproj} must set [project].dynamic = ["version"] for ship-rs commands')
     ship = nested_idx(data, "tool", "fastship") or {}
     rs = ship.get("rs") or {}
-    maturin = nested_idx(data, "tool", "maturin") or {}
-    bins = list(rs.get("bins") or [])
-    data_scripts = rs.get("data_scripts")
-    if not data_scripts and maturin.get("data"): data_scripts = str(Path(maturin["data"]) / "scripts")
-    data_scripts = root / data_scripts if data_scripts else None
     branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
     manifest_path = root / rs.get("manifest_path", "Cargo.toml")
-    return RustConfig(root=root, pyproject=pyproj, data=data, manifest_path=manifest_path, bins=bins, data_scripts=data_scripts, branch=branch)
+    return RustConfig(root=root, pyproject=pyproj, data=data, manifest_path=manifest_path, branch=branch)
 
 
 # ---------------------------------------------------------------------------
@@ -314,44 +307,6 @@ def _replace_toml_section_key(p:Path, section:str, key:str, val:str):
     raise ValueError(f"Could not find {key!r} in [{section}] of {p}")
 
 
-def _bin_suffix(target:str = None) -> str:
-    if target and "windows" in target: return ".exe"
-    return ".exe" if os.name == "nt" else ""
-
-
-def _cargo_profile_dir(root:Path, profile:str, target:str = None) -> Path:
-    return root / "target" / target / profile if target else root / "target" / profile
-
-
-def _chmod_exec(p:Path):
-    try: p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except PermissionError: pass
-
-
-def _copy_rs_bins(cfg:RustConfig, release:bool = False, target:str = None):
-    "Build configured Rust bins and copy them into maturin's .data/scripts folder."
-    if not cfg.bins: return []
-    if not cfg.data_scripts: raise ValueError("Set [tool.fastship.rs].data_scripts or [tool.maturin].data before copying Rust bins")
-    os.chdir(cfg.root)
-    profile = "release" if release else "debug"
-    flags = " --release" if release else ""
-    target_arg = f" --target {_q(target)}" if target else ""
-    run(f"cargo build{flags}{target_arg} --bins")
-    cfg.data_scripts.mkdir(parents=True, exist_ok=True)
-    suffix = _bin_suffix(target)
-    res = []
-    for b in cfg.bins:
-        for old in (cfg.data_scripts / b, cfg.data_scripts / f"{b}.exe"):
-            if old.exists(): old.unlink()
-        src = _cargo_profile_dir(cfg.root, profile, target) / f"{b}{suffix}"
-        if not src.exists(): raise FileNotFoundError(f"Built binary not found: {src}")
-        dst = cfg.data_scripts / src.name
-        shutil.copy2(src, dst)
-        _chmod_exec(dst)
-        res.append(dst)
-    return res
-
-
 def _maturin_cmd(command:str, release:bool = False, target:str = None, outdir:str = None, args:str = "") -> str:
     parts = ["maturin", command]
     if release: parts.append("--release")
@@ -364,12 +319,6 @@ def _maturin_cmd(command:str, release:bool = False, target:str = None, outdir:st
 def _is_maturin_project(data:dict) -> bool:
     build_backend = nested_idx(data, "build-system", "build-backend") or ""
     return "maturin" in build_backend or bool(nested_idx(data, "tool", "maturin"))
-
-
-def _cargo_bins(manifest:Path) -> list[str]:
-    "Read explicit `[[bin]]` names from Cargo.toml."
-    data = _load_toml(manifest)
-    return [o["name"] for o in data.get("bin", []) if o.get("name")]
 
 
 def _cargo_version(manifest:Path) -> str:
@@ -512,34 +461,9 @@ def _init_rs_config(root:Path, branch:str = None, force:bool = False):
     _ensure_toml_section(pyproj, "project.optional-dependencies", dict(dev=["fastship>=0.0.11", "maturin>=1.0,<2.0", "pytest"]))
     _ensure_rs_runtime_version(root, data)
     _ensure_py_runtime_version(root, data)
-    maturin = nested_idx(data, "tool", "maturin") or {}
-    data_scripts = str(Path(maturin["data"]) / "scripts") if maturin.get("data") else None
     branch = branch or nested_idx(data, "tool", "fastship", "branch") or _git_branch()
     _ensure_toml_section(pyproj, "tool.fastship", dict(branch=branch), replace=force)
-    bins = _cargo_bins(manifest)
-    items = dict(bins=bins) if bins else {}
-    if data_scripts: items["data_scripts"] = data_scripts
-    _ensure_toml_section(pyproj, "tool.fastship.rs", items, replace=force)
     return pyproj
-
-
-def _update_rs_ci(root:Path):
-    wf = root / ".github" / "workflows" / "ci.yml"
-    if not wf.exists(): return None
-    txt = wf.read_text(encoding="utf-8")
-    txt = txt.replace("- run: tools/build.sh release", "- run: ship-rs-prep --release")
-    txt = txt.replace("- run: tools/build.sh", "- run: ship-rs-prep")
-    if "ship-rs-prep" in txt and "pip install -e '.[dev]'" not in txt:
-        lines, inserted = txt.splitlines(), False
-        out = []
-        for ln in lines:
-            if not inserted and re.search(r"- run: ship-rs-prep(\s|$)", ln):
-                out.append(f"{ln.split('- run:', 1)[0]}- run: pip install -e '.[dev]'")
-                inserted = True
-            out.append(ln)
-        txt = "\n".join(out) + ("\n" if txt.endswith("\n") else "")
-    wf.write_text(txt, encoding="utf-8")
-    return wf
 
 
 # ---------------------------------------------------------------------------
@@ -707,47 +631,26 @@ def ship_release(
     run("git push")
 
 
-def ship_rs_init(branch: str = None, ci: bool = False, force: bool = False):
+def ship_rs_init(branch: str = None, force: bool = False):
     "Configure an existing maturin/PyO3 project for fastship Rust commands."
     root = _find_pyproject().parent
     pyproj = _init_rs_config(root, branch=branch, force=force)
     print(f"Updated {pyproj}")
-    if ci:
-        wf = _update_rs_ci(root)
-        if wf: print(f"Updated {wf}")
 
 
 @call_parse
 def ship_rs_init_cli(
     branch: str = None,   # Branch for [tool.fastship] (defaults to existing/current)
-    ci: bool = False,     # Update .github/workflows/ci.yml to call ship-rs-prep
-    force: bool = False,  # Replace existing [tool.fastship] / [tool.fastship.rs] keys
+    force: bool = False,  # Replace existing [tool.fastship] keys
 ):
     "Configure an existing maturin/PyO3 project for fastship Rust commands."
-    return ship_rs_init(branch=branch, ci=ci, force=force)
-
-
-def ship_rs_prep(release: bool = False, target: str = None):
-    "Build configured Rust CLI bins and copy them into maturin .data/scripts."
-    cfg = get_rs_config()
-    copied = _copy_rs_bins(cfg, release=release, target=target)
-    for p in copied: print(f"Copied {p}")
-
-
-@call_parse
-def ship_rs_prep_cli(
-    release: bool = False,  # Build bins with `cargo build --release`
-    target: str = None,     # Optional Rust target triple
-):
-    "Build configured Rust CLI bins and copy them into maturin .data/scripts."
-    return ship_rs_prep(release=release, target=target)
+    return ship_rs_init(branch=branch, force=force)
 
 
 def ship_rs_build(release: bool = True, target: str = None, outdir: str = "dist", args: str = ""):
-    "Prepare configured Rust CLI bins, then build wheels with maturin."
+    "Build wheels with maturin."
     cfg = get_rs_config()
     os.chdir(cfg.root)
-    _copy_rs_bins(cfg, release=release, target=target)
     run(_maturin_cmd("build", release=release, target=target, outdir=outdir, args=args))
 
 
@@ -758,16 +661,14 @@ def ship_rs_build_cli(
     outdir: str = "dist",  # Wheel output directory
     args: str = "",        # Extra arguments appended to `maturin build`
 ):
-    "Prepare configured Rust CLI bins, then build wheels with maturin."
+    "Build wheels with maturin."
     return ship_rs_build(release=release, target=target, outdir=outdir, args=args)
 
 
 def ship_rs_test(target: str = None, pytest_args: str = "-q"):
-    "Run cargo tests, install a local wheel, then run pytest."
+    "Build and install a local wheel, then run pytest."
     cfg = get_rs_config()
     os.chdir(cfg.root)
-    run("cargo test")
-    _copy_rs_bins(cfg, release=False, target=target)
     with tempfile.TemporaryDirectory() as d:
         out = Path(d)
         run(_maturin_cmd("build", target=target, outdir=out))
@@ -782,7 +683,7 @@ def ship_rs_test_cli(
     target: str = None,      # Optional Rust target triple for bin prep/build
     pytest_args: str = "-q", # Arguments passed to pytest
 ):
-    "Run cargo tests, install a local wheel, then run pytest."
+    "Build and install a local wheel, then run pytest."
     return ship_rs_test(target=target, pytest_args=pytest_args)
 
 
@@ -1002,11 +903,10 @@ name = \"{pkg_name}\"
 crate-type = [\"cdylib\", \"rlib\"]
 
 [dependencies]
-pyo3 = {{ version = \">=0.28\", optional = true }}
+pyo3 = \">=0.28\"
 
 [features]
-extension-module = [\"pyo3\", \"pyo3/extension-module\"]
-pyo3 = [\"dep:pyo3\"]
+extension-module = [\"pyo3/extension-module\"]
 """
 
 def _template_rs_lib()->str:
@@ -1014,31 +914,18 @@ def _template_rs_lib()->str:
     format!("Hello, {name}!")
 }
 
-#[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
 
-#[cfg(feature = "pyo3")]
 #[pyfunction(name = "hello")]
 fn py_hello(name: &str) -> String {
     hello(name)
 }
 
-#[cfg(feature = "pyo3")]
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_hello, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hello_returns_greeting() {
-        assert_eq!(hello("Rust"), "Hello, Rust!");
-    }
 }
 """
 
@@ -1129,43 +1016,23 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -e '.[dev]'
-      - run: ship-rs-test
+      - run: pytest -q
 
-  linux:
+  build:
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - uses: PyO3/maturin-action@v1
         with:
           args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
           manylinux: auto
-          before-script-linux: |
-            python3.13 -m pip install 'fastship>=0.0.11'
-            python3.13 -m fastship.rs_prep --release
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux
-          path: dist
-
-  macos:
-    needs: test
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - run: python -m pip install 'fastship>=0.0.11'
-      - run: python -m fastship.rs_prep --release
-      - uses: PyO3/maturin-action@v1
-        with:
-          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos
+          name: wheels-${{ matrix.os }}
           path: dist
 
   sdist:
@@ -1183,7 +1050,7 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, sdist]
+    needs: [build, sdist]
     runs-on: ubuntu-latest
     permissions:
       id-token: write

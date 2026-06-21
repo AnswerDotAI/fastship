@@ -81,32 +81,20 @@ name = "my_project"
 dynamic = ["version"]
 ```
 
-Configure the native bins once:
-
-```toml
-[tool.fastship.rs]
-bins = ["mycli", "myothercli"]
-data_scripts = "python/my_project.data/scripts"
-```
-
-If `data_scripts` is omitted, fastship uses `[tool.maturin].data` plus `/scripts`.
-
 Commands:
 
 ```bash
 ship-rs-new my-project  # create a new maturin/PyO3 project
 ship-rs-init            # configure an existing maturin/PyO3 project
-ship-rs-init --ci       # also update CI build step to call ship-rs-prep
-ship-rs-prep --release   # cargo build --release --bins, copy bins into .data/scripts
-ship-rs-build            # prep bins, then maturin build --release -o dist
-ship-rs-test             # cargo test, prep debug bins, build/install wheel, pytest -q
+ship-rs-build            # maturin build --release -o dist
+ship-rs-test             # build/install wheel, pytest -q
 ship-rs-bump             # bump Cargo.toml [package].version
 ship-rs-release          # tag v<version> and push branch + tags
 ```
 
-`ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module, infers `bins` from explicit `[[bin]]` entries in `Cargo.toml`, and infers `data_scripts` from `[tool.maturin].data`.
+`ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, and exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module.
 
-Generated CI builds Linux wheels with `maturin-action` and `manylinux: auto`. The Linux prep step runs inside the manylinux container via `before-script-linux`; macOS runs the same prep before the host build.
+Generated CI runs the tests, then builds wheels with `maturin-action` across an OS matrix (`manylinux: auto` on Linux) and publishes to GitHub Releases and PyPI on `v*` tags. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
 
 ### `ship-pr`
 
