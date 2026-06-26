@@ -26,7 +26,7 @@ This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, R
 
 ### `ship-bump`
 
-Bump a version part (0=major, 1=minor, 2=patch):
+Bump a version part (0=major, 1=minor, 2=patch). For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps `[package].version` in `Cargo.toml` and runs `maturin develop`; otherwise it rewrites `__version__` in your package `__init__.py`:
 
 ```bash
 ship-bump --part 2
@@ -88,7 +88,7 @@ ship-rs-new my-project  # create a new maturin/PyO3 project
 ship-rs-init            # configure an existing maturin/PyO3 project
 ship-rs-build            # maturin build --release -o dist
 ship-rs-test             # build/install wheel, pytest -q
-ship-rs-bump             # bump Cargo.toml version, then refresh the local editable install
+ship-bump                # bump Cargo.toml version, then refresh the local editable install
 ship-rs-release          # tag v<version> and push branch + tags
 ```
 

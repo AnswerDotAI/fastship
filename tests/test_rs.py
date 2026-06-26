@@ -36,16 +36,30 @@ def test_get_rs_config(tmp_path):
     assert cfg.manifest_path == tmp_path / "Cargo.toml"
 
 
-def test_ship_rs_bump_updates_pyproject_and_cargo(tmp_path, monkeypatch):
+def test_ship_bump_routes_to_cargo_when_cargo_toml_present(tmp_path, monkeypatch):
     _make_rs_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     calls = []
     monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: calls.append(cmd))
 
-    relmod.ship_rs_bump(part=1)
+    relmod.ship_bump(part=1)
 
     pyproject = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert 'dynamic = ["version"]' in pyproject
     assert 'version = "0.2.0"' not in pyproject
     assert 'version = "0.2.0"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")
     assert any("maturin develop" in c for c in calls)  # bump refreshes the local install
+
+
+def test_ship_bump_routes_to_init_when_no_cargo_toml(tmp_path, monkeypatch):
+    pyproj = '[project]\nname = "myproj"\nversion = "0.1.2"\n'
+    (tmp_path / "pyproject.toml").write_text(pyproj, encoding="utf-8")
+    pkg = tmp_path / "myproj"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text('__version__ = "0.1.2"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not shell out")))
+
+    relmod.ship_bump(part=1)
+
+    assert '__version__ = "0.2.0"' in (pkg / "__init__.py").read_text(encoding="utf-8")

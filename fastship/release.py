@@ -9,7 +9,7 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
     "ship_bump", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
     "ship_rs_new", "ship_rs_new_cli", "ship_rs_init", "ship_rs_init_cli",
-    "ship_rs_build", "ship_rs_build_cli", "ship_rs_test", "ship_rs_test_cli", "ship_rs_bump", "ship_rs_bump_cli",
+    "ship_rs_build", "ship_rs_build_cli", "ship_rs_test", "ship_rs_test_cli", "ship_rs_bump",
     "ship_rs_release", "ship_rs_release_cli"]
 
 import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, tempfile
@@ -560,7 +560,8 @@ def ship_bump(
     part: int = 2,  # Part of version to bump (0=major, 1=minor, 2=patch)
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
-    "Increment `__version__` in your package `__init__.py` by one."
+    "Bump version: Cargo.toml (then `maturin develop`) for Rust projects, else `__init__.py`."
+    if (_find_pyproject().parent / "Cargo.toml").exists(): return ship_rs_bump(part=part, unbump=unbump)
     cfg = get_config()
     print(f"Old version: {cfg.version}")
     new = bump_version(cfg.version, part=part, unbump=unbump)
@@ -696,15 +697,6 @@ def ship_rs_bump(part: int = 2, unbump: bool = False):
     print(f"{old} -> {new}")
     os.chdir(cfg.root)
     run("maturin develop")
-
-
-@call_parse
-def ship_rs_bump_cli(
-    part: int = 2,          # Part of version to bump (0=major, 1=minor, 2=patch)
-    unbump: bool = False,   # Reduce version instead of increasing it
-):
-    "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
-    return ship_rs_bump(part=part, unbump=unbump)
 
 
 def ship_rs_release(remote: str = "origin", branch: str = None):
@@ -969,7 +961,7 @@ Release flow is: release first, then bump.
 ```bash
 ship-rs-test
 ship-rs-release
-ship-rs-bump
+ship-bump
 ```
 
 The GitHub workflow builds wheels on tags matching `v*` and publishes them to GitHub Releases and PyPI.
@@ -996,7 +988,7 @@ Release flow is: release first, then bump.
 1. Run `ship-rs-test`.
 2. Confirm the release version in `Cargo.toml` (`[package].version`).
 3. Run `ship-rs-release`.
-4. After pushing the release tag, run `ship-rs-bump`, commit the `Cargo.toml` version bump, and push to `main` without a tag.
+4. After pushing the release tag, run `ship-bump`, commit the `Cargo.toml` version bump, and push to `main` without a tag.
 """
 
 def _template_rs_workflow()->str:

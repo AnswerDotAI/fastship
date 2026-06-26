@@ -50,7 +50,6 @@ ship-pr = "fastship.release:ship_pr"
 ship-rs-init = "fastship.release:ship_rs_init_cli"
 ship-rs-build = "fastship.release:ship_rs_build_cli"
 ship-rs-test = "fastship.release:ship_rs_test_cli"
-ship-rs-bump = "fastship.release:ship_rs_bump_cli"
 ship-rs-release = "fastship.release:ship_rs_release_cli"
 
 [tool.setuptools.dynamic]
