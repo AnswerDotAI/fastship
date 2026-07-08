@@ -555,12 +555,22 @@ class Release:
 # CLI entrypoints
 # ---------------------------------------------------------------------------
 
+
+def _nbdev_release():
+    "The `nbdev.release` module if this is an nbdev project, else `None`."
+    from nbdev.config import is_nbdev
+    if not is_nbdev(): return None
+    import nbdev.release
+    return nbdev.release
+
+
 @call_parse
 def ship_bump(
     part: int = 2,  # Part of version to bump (0=major, 1=minor, 2=patch)
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
-    "Bump version: Cargo.toml (then `maturin develop`) for Rust projects, else `__init__.py`."
+    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust projects; else `__init__.py`."
+    if (nbr := _nbdev_release()): return nbr.nbdev_bump_version(part=part, unbump=unbump)
     if (_find_pyproject().parent / "Cargo.toml").exists(): return ship_rs_bump(part=part, unbump=unbump)
     cfg = get_config()
     print(f"Old version: {cfg.version}")
@@ -583,6 +593,7 @@ def ship_pypi(
     quiet: bool = False,  # Reduce output verbosity
 ):
     "Build and upload the package to PyPI (uses `python -m build` + `twine upload`)."
+    if (nbr := _nbdev_release()): return nbr.release_pypi(repository=repository, quiet=quiet)
     cfg = get_config()
     os.chdir(cfg.root)
     q = " --quiet" if quiet else ""
@@ -598,6 +609,7 @@ async def ship_changelog(
     repo: str = None,   # Override repo ("OWNER/REPO")
 ):
     "Create/update CHANGELOG.md from closed GitHub issues (without opening editor or releasing)."
+    if (nbr := _nbdev_release()): return await nbr.changelog(repo=repo, token=token)
     print(f"Updated {(await Release(repo=repo, token=token).changelog()).changefile}")
 
 
@@ -608,6 +620,7 @@ async def ship_release_gh(
     no_changelog: bool = False,  # Skip changelog generation (assumes CHANGELOG.md is ready)
 ):
     "Create/update CHANGELOG.md, let you edit it, then commit/push and create a GitHub release."
+    if (nbr := _nbdev_release()): return await nbr.release_gh(token=token, repo=repo, no_changelog=no_changelog)
     rel = Release(repo=repo, token=token)
     if not no_changelog: await rel.changelog()
     subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])

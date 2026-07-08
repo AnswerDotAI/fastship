@@ -4,6 +4,8 @@ Tiny, local-first release tools for modern Python projects.
 
 `fastship` gives you the same *workflow feel* as the nbdev `nbdev-bump-version`, `release-pypi`, and `release-gh` commands — but for plain (non-notebook) Python projects.
 
+In an nbdev project (one with `[tool.nbdev]` in `pyproject.toml`), `ship-bump`, `ship-pypi`, `ship-changelog`, and `ship-gh` automatically delegate to their nbdev equivalents, so you can use the same commands in every repo.
+
 ## Install
 
 ```bash
