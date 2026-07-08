@@ -2,6 +2,16 @@
 
 <!-- do not remove -->
 
+## 0.1.0
+
+### New Features
+
+- ghapi v2 compat ([#21](https://github.com/AnswerDotAI/fastship/issues/21))
+- Consolidate Rust CLI wrappers into their base functions ([#20](https://github.com/AnswerDotAI/fastship/issues/20))
+- Unify ship-rs-bump into ship-bump with automatic Cargo.toml detection ([#19](https://github.com/AnswerDotAI/fastship/issues/19))
+- After bumping Cargo.toml version, refresh the local editable install via maturin develop ([#18](https://github.com/AnswerDotAI/fastship/issues/18))
+
+
 ## 0.0.15
 
 ### New Features
