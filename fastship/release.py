@@ -532,7 +532,8 @@ class Release:
             raise ValueError(
                 f"{self.changefile} is missing the fastship changelog marker "
                 f"{CHANGELOG_MARKER.strip()!r}. Add it near the top of the file.")
-        txt = txt.replace(CHANGELOG_MARKER, CHANGELOG_MARKER + res + "\n")
+        from nbdev.release import update_changelog
+        txt = update_changelog(txt, self.cfg.version, res, CHANGELOG_MARKER)
         shutil.copy(self.changefile, self.changefile.with_suffix(".bak"))
         self.changefile.write_text(txt, encoding="utf-8")
         run(f"git add {self.changefile}")
@@ -637,8 +638,8 @@ async def ship_release(
     repo: str = None,   # Override repo ("OWNER/REPO")
     repository: str = "pypi",  # PyPI repository in ~/.pypirc
 ):
-    "Release to GitHub and PyPI, bump version, and push (assumes CHANGELOG.md is ready)."
-    await ship_release_gh(token=token, repo=repo, no_changelog=True)
+    "Generate CHANGELOG.md, release to GitHub and PyPI, bump version, and push."
+    await ship_release_gh(token=token, repo=repo)
     ship_pypi(repository=repository)
     ship_bump()
     run("git commit -am bump")

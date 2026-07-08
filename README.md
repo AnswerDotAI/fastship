@@ -163,18 +163,19 @@ The token must have permission to create releases (typically `repo` scope for cl
 
 ### `ship-release`
 
-Full release workflow assuming changelog is ready:
+Full release workflow:
 
 ```bash
-ship-changelog      # generate changelog, edit as needed
-ship-release        # release to GitHub + PyPI, bump version, push
+ship-release        # generate changelog, release to GitHub + PyPI, bump version, push
 ```
 
 This runs:
-1. `ship-gh --no_changelog` (open `CHANGELOG.md` for final review, commit if needed, push, create GitHub release)
+1. `ship-gh` (generate `CHANGELOG.md`, open it for review, commit if needed, push, create GitHub release)
 2. `ship-pypi` (upload to PyPI)
 3. `ship-bump` (bump patch version)
 4. Commit and push the version bump
+
+Changelog generation is idempotent: regenerating replaces the pending section for the current version rather than duplicating it, so `ship-release` is safe to re-run after a partial failure. It also means regeneration discards manual edits to that pending section, so make final edits in the editor that `ship-gh` opens.
 
 ## Notes
 
