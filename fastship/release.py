@@ -19,7 +19,7 @@ from packaging.version import Version
 
 from fastcore.all import *  # Path, nested_idx, ifnone, parallel, run, repo_details, call_parse, ...
 from fastgit import Git
-from ghapi.core import *    # GhApi, HTTP404NotFoundError, ...
+from ghapi.core import *    # GhApi, APIError, ...
 
 GH_HOST = "https://api.github.com"
 CHANGELOG_MARKER = "<!-- do not remove -->\n"
@@ -499,10 +499,10 @@ class Release:
         self.gh = GhApi(owner, repo, token)
         self.groups = groups
 
-    def _issues(self, label):
-        return self.gh.issues.list_for_repo(state="closed", sort="created", filter="all", since=self.commit_date, labels=label)
+    async def _issues(self, label):
+        return await self.gh.issues.list_for_repo(state="closed", sort="created", filter="all", since=self.commit_date, labels=label)
 
-    def changelog(self, debug: bool = False):
+    async def changelog(self, debug: bool = False):
         """Create or update CHANGELOG.md from closed and labeled GitHub issues.
 
         Issues are pulled since the latest GitHub release's `published_at`.
@@ -511,16 +511,18 @@ class Release:
         if not self.changefile.exists(): self.changefile.write_text(f"# Release notes\n\n{CHANGELOG_MARKER}", encoding="utf-8")
 
         try:
-            lr = self.gh.repos.get_latest_release()
+            lr = await self.gh.repos.get_latest_release()
             self.commit_date = lr.published_at
-        except HTTP404NotFoundError: lr, self.commit_date = None, "2000-01-01T00:00:00Z"
+        except APIError as e:
+            if e.status_code != 404: raise
+            lr, self.commit_date = None, "2000-01-01T00:00:00Z"
 
         if lr and (Version(self.cfg.version) <= Version(lr.tag_name)):
             print(f"Error: Version bump required: expected: >{lr.tag_name}, got: {self.cfg.version}.")
             raise SystemExit(1)
 
         res = f"\n## {self.cfg.version}\n\n"
-        issues = parallel(self._issues, self.groups.keys(), progress=False, threadpool=True)
+        issues = await parallel_async(self._issues, self.groups.keys())
         res += "".join(_issues_txt(*o) for o in zip(issues, self.groups.values()))
 
         if debug: return res
@@ -543,9 +545,9 @@ class Release:
         if len(its) <= 1: return ""
         return "\n".join(its[1].splitlines()[1:]).strip()
 
-    def release(self):
+    async def release(self):
         "Tag and create a release in GitHub for the current version."
-        self.gh.create_release(self.cfg.version, branch=self.cfg.branch, body=self.latest_notes())
+        await self.gh.create_release(self.cfg.version, branch=self.cfg.branch, body=self.latest_notes())
         return self
 
 
@@ -591,39 +593,39 @@ def ship_pypi(
 
 
 @call_parse
-def ship_changelog(
+async def ship_changelog(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
 ):
     "Create/update CHANGELOG.md from closed GitHub issues (without opening editor or releasing)."
-    print(f"Updated {Release(repo=repo, token=token).changelog().changefile}")
+    print(f"Updated {(await Release(repo=repo, token=token).changelog()).changefile}")
 
 
 @call_parse
-def ship_release_gh(
+async def ship_release_gh(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
     no_changelog: bool = False,  # Skip changelog generation (assumes CHANGELOG.md is ready)
 ):
     "Create/update CHANGELOG.md, let you edit it, then commit/push and create a GitHub release."
     rel = Release(repo=repo, token=token)
-    if not no_changelog: rel.changelog()
+    if not no_changelog: await rel.changelog()
     subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
     if not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
 
     if _git_has_changes(): run("git commit -am release")
     run("git push")
-    print(f"Released {rel.release().cfg.version}")
+    print(f"Released {(await rel.release()).cfg.version}")
 
 
 @call_parse
-def ship_release(
+async def ship_release(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
     repository: str = "pypi",  # PyPI repository in ~/.pypirc
 ):
     "Release to GitHub and PyPI, bump version, and push (assumes CHANGELOG.md is ready)."
-    ship_release_gh(token=token, repo=repo, no_changelog=True)
+    await ship_release_gh(token=token, repo=repo, no_changelog=True)
     ship_pypi(repository=repository)
     ship_bump()
     run("git commit -am bump")
@@ -1115,7 +1117,7 @@ def ship_new(
 # ---------------------------------------------------------------------------
 
 @call_parse
-def ship_pr(
+async def ship_pr(
     title: str,             # PR title (also used for commit message if needed)
     branch: str = None,     # Branch name (auto-generated from title if not provided)
     label: str = "enhancement",  # GitHub label for the PR
@@ -1160,16 +1162,16 @@ def ship_pr(
 
         gh = GhApi(owner, repo_name, token)
         pr_body = Path(body).read_text().strip() if body and '\n' not in body and Path(body).exists() else body
-        pr = gh.pulls.create(title=title, head=pr_branch, base=default, body=pr_body)
+        pr = await gh.pulls.create(title=title, head=pr_branch, base=default, body=pr_body)
         print(f"Created PR #{pr.number}: {pr.html_url}")
 
-        try: gh.issues.add_labels(pr.number, labels=[label])
+        try: await gh.issues.add_labels(pr.number, labels=[label])
         except Exception: pass
 
-        gh.pulls.merge(pr.number, merge_method="squash", commit_title=title)
+        await gh.pulls.merge(pr.number, merge_method="squash", commit_title=title)
         print(f"Merged PR #{pr.number}")
 
-        try: gh.git.delete_ref(f"heads/{pr_branch}")
+        try: await gh.git.delete_ref(f"heads/{pr_branch}")
         except Exception: pass
 
     finally: g.switch(default)

@@ -1,4 +1,4 @@
-import os
+import os, asyncio
 import builtins
 from types import SimpleNamespace
 
@@ -16,11 +16,11 @@ def test_ship_release_gh_no_changelog_edits_and_skips_empty_commit(monkeypatch, 
             self.changefile = changefile
             self.cfg = SimpleNamespace(version="0.1.0")
 
-        def changelog(self):
+        async def changelog(self):
             state.changelog_called = True
             return self
 
-        def release(self):
+        async def release(self):
             state.release_called = True
             return self
 
@@ -32,7 +32,7 @@ def test_ship_release_gh_no_changelog_edits_and_skips_empty_commit(monkeypatch, 
     monkeypatch.setattr(relmod.subprocess, "run", lambda args: editor_calls.append(args))
     monkeypatch.setattr(builtins, "input", lambda prompt="": "y")
 
-    relmod.ship_release_gh(token="tok", repo="owner/repo", no_changelog=True)
+    asyncio.run(relmod.ship_release_gh(token="tok", repo="owner/repo", no_changelog=True))
 
     assert not state.changelog_called
     assert state.release_called
@@ -48,11 +48,11 @@ def test_changelog_raises_when_marker_is_missing(tmp_path):
     rel = object.__new__(relmod.Release)
     rel.changefile = changefile
     rel.cfg = SimpleNamespace(version="0.0.2", branch="main")
-    rel.gh = SimpleNamespace(
-        repos=SimpleNamespace(get_latest_release=lambda: SimpleNamespace(tag_name="0.0.1", published_at="2026-03-17T04:23:40Z")))
+    async def _fake_lr(): return SimpleNamespace(tag_name="0.0.1", published_at="2026-03-17T04:23:40Z")
+    rel.gh = SimpleNamespace(repos=SimpleNamespace(get_latest_release=_fake_lr))
     rel.groups = {}
 
-    try: rel.changelog()
+    try: asyncio.run(rel.changelog())
     except ValueError as e: msg = str(e)
     else: raise AssertionError("Expected changelog() to fail when the marker is missing")
 
