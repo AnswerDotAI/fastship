@@ -143,13 +143,13 @@ This is an interactive helper:
 ship-gh
 ```
 
-If you've already prepared the changelog (e.g., via `ship-changelog`), skip the changelog step:
+If you've reviewed a changelog created by `ship-changelog`, release it without regenerating or reopening it:
 
 ```bash
-ship-gh --no_changelog
+ship-gh --no_changelog --no_editor
 ```
 
-This still opens `CHANGELOG.md` in your editor for final review before the release is created.
+The confirmation prompt remains. Add `--yes` only when confirmation has already happened elsewhere.
 
 #### GitHub token setup
 
@@ -175,7 +175,15 @@ This runs:
 3. `ship-bump` (bump patch version)
 4. Commit and push the version bump
 
-Changelog generation is idempotent: regenerating replaces the pending section for the current version rather than duplicating it, so `ship-release` is safe to re-run after a partial failure. It also means regeneration discards manual edits to that pending section, so make final edits in the editor that `ship-gh` opens.
+To generate and review the changelog separately, then run the rest of the workflow without another editor or prompt:
+
+```bash
+ship-changelog
+# review CHANGELOG.md
+ship-release --no_changelog --no_editor --yes
+```
+
+Changelog generation is idempotent: regenerating replaces the pending section for the current version rather than duplicating it. Regeneration also discards manual edits to that pending section, so do not regenerate after the final review.
 
 ## Notes
 

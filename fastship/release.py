@@ -477,7 +477,7 @@ def _issue_txt(issue):
 def _issues_txt(iss, label):
     if not iss: return ""
     res = f"### {label}\n\n"
-    return res + "\n".join(map(_issue_txt, iss)) + "\n"
+    return res + "\n".join(map(_issue_txt, iss))
 
 
 class Release:
@@ -523,7 +523,8 @@ class Release:
 
         res = f"\n## {self.cfg.version}\n\n"
         issues = await parallel_async(self._issues, self.groups.keys())
-        res += "".join(_issues_txt(*o) for o in zip(issues, self.groups.values()))
+        sections = (_issues_txt(*o) for o in zip(issues, self.groups.values()))
+        res += "\n\n".join(filter(None, sections))
 
         if debug: return res
 
@@ -619,13 +620,16 @@ async def ship_release_gh(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
     no_changelog: bool = False,  # Skip changelog generation (assumes CHANGELOG.md is ready)
+    no_editor: bool = False,  # Skip opening CHANGELOG.md in an editor
+    yes: bool = False,  # Release without asking for confirmation
 ):
-    "Create/update CHANGELOG.md, let you edit it, then commit/push and create a GitHub release."
-    if (nbr := _nbdev_release()): return await nbr.release_gh(token=token, repo=repo, no_changelog=no_changelog)
+    "Create/update CHANGELOG.md, optionally edit it, then commit/push and create a GitHub release."
+    if (nbr := _nbdev_release()):
+        return await nbr.release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
     rel = Release(repo=repo, token=token)
     if not no_changelog: await rel.changelog()
-    subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
-    if not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
+    if not no_editor: subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
+    if not yes and not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
 
     if _git_has_changes(): run("git commit -am release")
     run("git push")
@@ -637,9 +641,12 @@ async def ship_release(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
     repository: str = "pypi",  # PyPI repository in ~/.pypirc
+    no_changelog: bool = False,  # Skip changelog generation (assumes CHANGELOG.md is ready)
+    no_editor: bool = False,  # Skip opening CHANGELOG.md in an editor
+    yes: bool = False,  # Release without asking for confirmation
 ):
-    "Generate CHANGELOG.md, release to GitHub and PyPI, bump version, and push."
-    await ship_release_gh(token=token, repo=repo)
+    "Release to GitHub and PyPI, bump the version, and push."
+    await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
     ship_pypi(repository=repository)
     ship_bump()
     run("git commit -am bump")
