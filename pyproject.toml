@@ -23,7 +23,7 @@ classifiers = [
 
 dependencies = [
   "fastcore>=1.14.3",
-  "fastgit>=0.0.2",
+  "fastgit>=0.0.7",
   "nbdev>=3.1.0",
   "ghapi>=2.0.0",
   "packaging>=23.0",
@@ -50,7 +50,6 @@ ship-rs-new = "fastship.release:ship_rs_new"
 ship-pr = "fastship.release:ship_pr"
 ship-rs-init = "fastship.release:ship_rs_init"
 ship-rs-build = "fastship.release:ship_rs_build"
-ship-rs-test = "fastship.release:ship_rs_test"
 ship-rs-release = "fastship.release:ship_rs_release"
 
 [tool.setuptools.dynamic]

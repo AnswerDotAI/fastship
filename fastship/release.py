@@ -8,9 +8,9 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
     "ship_bump", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
-    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_test", "ship_rs_bump", "ship_rs_release"]
+    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_rs_release"]
 
-import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex, tempfile
+import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex
 from dataclasses import dataclass
 
 try: import tomllib
@@ -679,24 +679,6 @@ def ship_rs_build(
 
 
 
-@call_parse
-def ship_rs_test(
-    target: str = None,      # Optional Rust target triple for bin prep/build
-    pytest_args: str = "-q", # Arguments passed to pytest
-):
-    "Build and install a local wheel, then run pytest."
-    cfg = get_rs_config()
-    os.chdir(cfg.root)
-    with tempfile.TemporaryDirectory() as d:
-        out = Path(d)
-        run(_maturin_cmd("build", target=target, outdir=out))
-        wheels = list(out.glob("*.whl"))
-        if len(wheels) != 1: raise RuntimeError(f"Expected one wheel from maturin build, found {len(wheels)} in {out}")
-        run(f"{sys.executable} -m pip install --force-reinstall {_q(wheels[0])}")
-    run(f"pytest {pytest_args}")
-
-
-
 def ship_rs_bump(part: int = 2, unbump: bool = False):
     "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
     cfg = get_rs_config()
@@ -950,7 +932,7 @@ PyO3/maturin package scaffolded by fastship.
 
 ```bash
 pip install -e .[dev]
-ship-rs-test
+maturin develop && pytest -q
 ```
 
 ## Build
@@ -964,7 +946,7 @@ ship-rs-build
 Release flow is: release first, then bump.
 
 ```bash
-ship-rs-test
+maturin develop && pytest -q
 ship-rs-release
 ship-bump
 ```
@@ -978,7 +960,7 @@ def _template_rs_dev()->str:
 ## Commands
 
 ```bash
-ship-rs-test
+maturin develop && pytest -q
 ship-rs-build
 ```
 
@@ -990,7 +972,7 @@ The canonical version lives in `Cargo.toml`. `pyproject.toml` gets the Python pa
 
 Release flow is: release first, then bump.
 
-1. Run `ship-rs-test`.
+1. Run `maturin develop && pytest -q`.
 2. Confirm the release version in `Cargo.toml` (`[package].version`).
 3. Run `ship-rs-release`.
 4. After pushing the release tag, run `ship-bump`, commit the `Cargo.toml` version bump, and push to `main` without a tag.
@@ -1102,7 +1084,7 @@ def ship_rs_new(
     print(f"Created {root}")
     print(f"Next:\n  cd {root}")
     print("  pip install -e .[dev]")
-    print("  ship-rs-test")
+    print("  maturin develop && pytest -q")
 
 
 
@@ -1150,7 +1132,7 @@ async def ship_pr(
     g = Git(".")
     if not g.exists: raise SystemExit("Not a git repository")
 
-    try: default = g.remote('show', 'origin', split="\n", mute_errors=True).split("HEAD branch:")[1].split()[0]
+    try: default = g.remote('show', 'origin', mute_errors=True).split("HEAD branch:")[1].split()[0]
     except Exception: default = "main"
 
     current = g.branch(show_current=True).strip()
