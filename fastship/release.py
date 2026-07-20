@@ -1124,26 +1124,26 @@ async def ship_pr(
     title: str,             # PR title (also used for commit message if needed)
     branch: str = None,     # Branch name (auto-generated from title if not provided)
     label: str = "enhancement",  # GitHub label for the PR
-    body: str = "",         # PR body text, or path to file containing body
+    body: str = "",         # PR body text, path to a file containing it, or '-' to read from stdin
     token: str = None,      # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,       # Override repo ("OWNER/REPO")
 ):
     "Create a PR from uncommitted/unpushed work, merge it, and clean up."
-    g = Git(".")
+    g = Git(".", raise_exc=True)
     if not g.exists: raise SystemExit("Not a git repository")
 
-    try: default = g.remote('show', 'origin', mute_errors=True).split("HEAD branch:")[1].split()[0]
+    try: default = g.remote('show', 'origin').split("HEAD branch:")[1].split()[0]
     except Exception: default = "main"
 
     current = g.branch(show_current=True).strip()
     if current != default: raise SystemExit(f"Must be on {default} branch (currently on {current})")
 
     g.fetch('origin')
-    try: behind = bool(g.log(f'HEAD..origin/{default}', oneline=True, mute_errors=True).strip())
+    try: behind = bool(g.log(f'HEAD..origin/{default}', oneline=True).strip())
     except Exception: behind = False
     if behind: raise SystemExit(f"Local {default} is behind origin. Run: git pull")
 
-    try: has_commits = bool(g.log(f'origin/{default}..HEAD', oneline=True, mute_errors=True).strip())
+    try: has_commits = bool(g.log(f'origin/{default}..HEAD', oneline=True).strip())
     except Exception: has_commits = False
     has_changes = bool(g.status(porcelain=True))
     if not has_commits and not has_changes: raise SystemExit("Nothing to PR: no unpushed commits and no uncommitted changes")
@@ -1164,12 +1164,12 @@ async def ship_pr(
         if not token: raise SystemExit("No GitHub token found")
 
         gh = GhApi(owner, repo_name, token)
-        pr_body = Path(body).read_text().strip() if body and '\n' not in body and Path(body).exists() else body
+        if body == '-': pr_body = sys.stdin.read().strip()
+        else: pr_body = Path(body).read_text().strip() if body and '\n' not in body and Path(body).exists() else body
         pr = await gh.pulls.create(title=title, head=pr_branch, base=default, body=pr_body)
         print(f"Created PR #{pr.number}: {pr.html_url}")
 
-        try: await gh.issues.add_labels(pr.number, labels=[label])
-        except Exception: pass
+        await gh.issues.add_labels(pr.number, labels=[label])
 
         await gh.pulls.merge(pr.number, merge_method="squash", commit_title=title)
         print(f"Merged PR #{pr.number}")
@@ -1181,4 +1181,5 @@ async def ship_pr(
 
     g.fetch('origin')
     g.reset('--hard', f'origin/{default}')
+    g.branch('-D', pr_branch)
     print(f"Done! {default} updated to include squashed commit.")
