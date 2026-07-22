@@ -732,6 +732,7 @@ def _write(p:Path, s:str):
     p.write_text(s, encoding="utf-8")
 
 def _prepare_new_root(root:Path, force:bool = False):
+    root = root.expanduser()
     if root.exists():
         if not force: raise FileExistsError(f"{root} already exists (use force=True to overwrite)")
         shutil.rmtree(root)
