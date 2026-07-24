@@ -2,6 +2,19 @@
 
 <!-- do not remove -->
 
+## 0.1.1
+
+### New Features
+
+- Add Zig project scaffolding, GitHub Pages setup, wheel-only builds, git-derived authors, and unified release workflow across project types ([#28](https://github.com/AnswerDotAI/fastship/issues/28))
+- Add expanduser() to `_prepare_new_root` for ~-relative path support ([#27](https://github.com/AnswerDotAI/fastship/issues/27))
+- Remove silent error suppression in `ship_pr`: enable Git exceptions, require label success, support stdin body, and delete merged branch ([#26](https://github.com/AnswerDotAI/fastship/issues/26))
+- Remove ship-rs-test command in favor of maturin develop && pytest -q ([#25](https://github.com/AnswerDotAI/fastship/issues/25))
+- Add --`no_editor` and --yes flags to skip editor/confirmation in release workflow ([#24](https://github.com/AnswerDotAI/fastship/issues/24))
+- ship-release now generates changelog itself; changelog insertion is idempotent via nbdev `update_changelog` ([#23](https://github.com/AnswerDotAI/fastship/issues/23))
+- Add nbdev delegation to ship-bump, ship-pypi, ship-changelog, and ship-gh ([#22](https://github.com/AnswerDotAI/fastship/issues/22))
+
+
 ## 0.1.0
 
 ### New Features
@@ -119,5 +132,3 @@
 ## 0.0.1
 
 - init commit
-
-
