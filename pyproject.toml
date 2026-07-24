@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fastship"
 dynamic = ["version"]
-description = "Local-first release CLI tools: ship-bump, ship-pypi, ship-gh"
+description = "Local-first Python project scaffolding and release tools"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -42,6 +42,7 @@ Source = "https://github.com/answerdotai/fastship"
 [project.scripts]
 ship-bump = "fastship.release:ship_bump"
 ship-pypi = "fastship.release:ship_pypi"
+ship-pages = "fastship.release:ship_pages"
 ship-changelog = "fastship.release:ship_changelog"
 ship-gh = "fastship.release:ship_release_gh"
 ship-release = "fastship.release:ship_release"
@@ -51,9 +52,17 @@ ship-pr = "fastship.release:ship_pr"
 ship-rs-init = "fastship.release:ship_rs_init"
 ship-rs-build = "fastship.release:ship_rs_build"
 ship-rs-release = "fastship.release:ship_rs_release"
+ship-zig-new = "fastship.release:ship_zig_new"
+ship-zig-build = "fastship.release:ship_zig_build"
 
 [tool.setuptools.dynamic]
 version = { attr = "fastship.__version__" }
 
+[tool.setuptools]
+include-package-data = false
+
 [tool.setuptools.packages.find]
 include = ["fastship"]
+
+[tool.setuptools.package-data]
+fastship = ["_config.yml", "_layouts/*.html"]

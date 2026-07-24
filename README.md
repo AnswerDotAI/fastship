@@ -22,7 +22,7 @@ cd my-project
 pip install -e .[dev]
 ```
 
-This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, README, and everything wired for fastship.
+This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, README, and everything wired for fastship. Author metadata comes from Git's `user.name` and `user.email`. New projects also include fastship's Jekyll `_config.yml` and `_layouts/default.html`.
 
 ## Commands
 
@@ -62,6 +62,30 @@ Quiet mode:
 ship-pypi --quiet
 ```
 
+Build and upload a wheel without creating an sdist, either directly or as part of a plain Python release:
+
+```bash
+ship-pypi --wheel_only
+ship-release --wheel_only
+```
+
+For a permanently wheel-only project:
+
+```toml
+[tool.fastship]
+wheel-only = true
+```
+
+### `ship-pages`
+
+Enable GitHub Pages from the repository's `main` branch and set the repository homepage to the Pages URL:
+
+```bash
+ship-pages
+```
+
+Run this after creating the GitHub repository and making its first push. The repository is inferred from the local `origin` remote, and authentication uses the same token lookup as `ship-gh`.
+
 ### PyO3 / maturin projects
 
 Fastship can also handle the repeated local tooling for PyO3 projects that use maturin and need Rust CLI binaries bundled into wheel scripts.
@@ -91,12 +115,35 @@ ship-rs-new my-project  # create a new maturin/PyO3 project
 ship-rs-init            # configure an existing maturin/PyO3 project
 ship-rs-build            # maturin build --release -o dist
 ship-bump                # bump Cargo.toml version, then refresh the local editable install
-ship-rs-release          # tag v<version> and push branch + tags
+ship-release             # changelog, tag, publish via CI, then bump
 ```
 
 `ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, and exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module.
 
 Generated CI runs the tests, then builds wheels with `maturin-action` across an OS matrix (`manylinux: auto` on Linux) and publishes to GitHub Releases and PyPI on `v*` tags. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
+
+### Zig-backed projects
+
+Create Python CFFI bindings over a bundled Zig shared library:
+
+```bash
+ship-zig-new my-project
+cd my-project
+pip install -e .[dev]
+python build_lib.py
+pytest -q
+```
+
+Commands:
+
+```bash
+ship-zig-new my-project  # create a CFFI/Zig project
+ship-zig-build           # build and check the current platform wheel
+ship-bump                # bump the Python package version
+ship-release             # changelog, tag, publish via CI, then bump
+```
+
+The generated workflow builds one Python-ABI-independent wheel for Linux x86_64, Linux ARM64, macOS Intel, and macOS Apple Silicon. Tagged builds create the GitHub release and publish to PyPI with trusted publishing.
 
 ### `ship-pr`
 
@@ -166,14 +213,15 @@ The token must have permission to create releases (typically `repo` scope for cl
 Full release workflow:
 
 ```bash
-ship-release        # generate changelog, release to GitHub + PyPI, bump version, push
+ship-release        # generate changelog, release, bump version, push
 ```
 
-This runs:
-1. `ship-gh` (generate `CHANGELOG.md`, open it for review, commit if needed, push, create GitHub release)
-2. `ship-pypi` (upload to PyPI)
-3. `ship-bump` (bump patch version)
-4. Commit and push the version bump
+`ship-release` selects the project type automatically:
+
+- Plain Python projects build and check the distribution before creating the GitHub release, upload it to PyPI, then bump.
+- Maturin and fastship Zig projects commit the changelog, push one annotated version tag for their trusted-publishing workflow, then bump.
+
+The final `Released` message is printed only after the full local publishing workflow succeeds. Tag-driven native releases print `Release started` because CI owns publication.
 
 To generate and review the changelog separately, then run the rest of the workflow without another editor or prompt:
 

@@ -38,7 +38,7 @@ def test_ship_release_gh_no_changelog_edits_and_skips_empty_commit(monkeypatch, 
     assert state.release_called
     assert editor_calls == [[os.environ.get("EDITOR", "nano"), changefile]]
     assert cmds == ["git push"]
-    assert "Released 0.1.0" in capsys.readouterr().out
+    assert "GitHub release created: 0.1.0" in capsys.readouterr().out
 
 
 def test_ship_release_gh_can_skip_editor_and_prompt(monkeypatch, tmp_path):
@@ -68,20 +68,42 @@ def test_ship_release_gh_can_skip_editor_and_prompt(monkeypatch, tmp_path):
     assert cmds == ["git push"]
 
 
-def test_ship_release_passes_review_flags(monkeypatch):
+def test_ship_release_builds_before_publishing(monkeypatch):
     calls = []
 
-    async def fake_gh(**kwargs): calls.append(("gh", kwargs))
+    class FakeRelease:
+        def __init__(self, **kwargs):
+            self.changefile = "CHANGELOG.md"
+            self.cfg = SimpleNamespace(version="0.1.0", root=".", wheel_only=False)
 
-    monkeypatch.setattr(relmod, "ship_release_gh", fake_gh)
-    monkeypatch.setattr(relmod, "ship_pypi", lambda **kwargs: calls.append(("pypi", kwargs)))
+        async def release(self):
+            calls.append(("gh", {}))
+            return self
+
+    async def fake_prepare(*args, **kwargs): calls.append(("prepare", {}))
+
+    monkeypatch.setattr(relmod, "Release", FakeRelease)
+    monkeypatch.setattr(relmod, "_prepare_release", fake_prepare)
+    monkeypatch.setattr(relmod, "_build_dist", lambda *a, **k: calls.append(("build", k)))
+    monkeypatch.setattr(relmod, "_commit_release", lambda *a, **k: calls.append(("commit", {})))
+    monkeypatch.setattr(relmod, "_upload_dist", lambda *a, **k: calls.append(("upload", k)))
     monkeypatch.setattr(relmod, "ship_bump", lambda: calls.append(("bump", {})))
     monkeypatch.setattr(relmod, "run", lambda cmd: calls.append((cmd, {})))
 
-    asyncio.run(relmod.ship_release(token="tok", repo="owner/repo", repository="testpypi", no_changelog=True, no_editor=True, yes=True))
+    asyncio.run(relmod.ship_release(token="tok", repo="owner/repo", repository="pypi", no_changelog=True, no_editor=True, yes=True))
 
-    assert calls[0] == ("gh", dict(token="tok", repo="owner/repo", no_changelog=True, no_editor=True, yes=True))
-    assert calls[1:] == [("pypi", dict(repository="testpypi")), ("bump", {}), ("git commit -am bump", {}), ("git push", {})]
+    assert [o[0] for o in calls] == ["prepare", "build", "commit", "gh", "upload", "bump", "git commit -am bump", "git push"]
+
+
+def test_build_dist_can_be_wheel_only(monkeypatch, tmp_path):
+    calls = []
+    cfg = SimpleNamespace(root=tmp_path, wheel_only=True)
+    monkeypatch.setattr(relmod, "run", lambda cmd: calls.append(cmd))
+
+    relmod._build_dist(cfg)
+
+    assert any("-m build --wheel" in o for o in calls)
+    assert calls[-1] == "twine check dist/*"
 
 
 def test_changelog_raises_when_marker_is_missing(tmp_path):

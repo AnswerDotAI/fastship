@@ -7,8 +7,8 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
-    "ship_bump", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
-    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_rs_release"]
+    "ship_bump", "ship_pages", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
+    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_rs_release", "ship_zig_new", "ship_zig_build"]
 
 import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex
 from dataclasses import dataclass
@@ -142,7 +142,7 @@ def _parse_repo(repo: str = None) -> tuple[str | None, str | None]:
 
 def _git_has_changes() -> bool:
     "Return `True` if the current git worktree has staged or unstaged changes."
-    return bool(run("git status --porcelain").strip())
+    return bool(run("git status --porcelain --untracked-files=no").strip())
 
 
 def _get_token(root: Path = None) -> str | None:
@@ -164,6 +164,7 @@ class ShipConfig:
     changelog_file: Path
     branch: str
     label_groups: dict
+    wheel_only: bool
 
     @property
     def version(self) -> str: return _read_version(self.init_file)
@@ -176,6 +177,8 @@ class RustConfig:
     data: dict
     manifest_path: Path
     branch: str
+    changelog_file: Path
+    label_groups: dict
 
     @property
     def version(self) -> str: return _cargo_version(self.manifest_path)
@@ -195,9 +198,10 @@ def get_config(start: str | Path | None = None) -> ShipConfig:
     changelog_file = root / ship.get("changelog_file", "CHANGELOG.md")
     branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
     label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
+    wheel_only = ship.get("wheel-only", False)
 
     return ShipConfig(root=root, pyproject=pyproj, data=data, pkg=pkg, pkg_path=pkg_path,
-        init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups)
+        init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups, wheel_only=wheel_only)
 
 
 def get_rs_config(start: str | Path | None = None) -> RustConfig:
@@ -213,7 +217,17 @@ def get_rs_config(start: str | Path | None = None) -> RustConfig:
     rs = ship.get("rs") or {}
     branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
     manifest_path = root / rs.get("manifest_path", "Cargo.toml")
-    return RustConfig(root=root, pyproject=pyproj, data=data, manifest_path=manifest_path, branch=branch)
+    changelog_file = root / ship.get("changelog_file", "CHANGELOG.md")
+    label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
+    return RustConfig(root=root, pyproject=pyproj, data=data, manifest_path=manifest_path, branch=branch,
+        changelog_file=changelog_file, label_groups=label_groups)
+
+
+def _project_type(root:Path, data:dict)->str:
+    if (root/"Cargo.toml").exists() or _is_maturin_project(data): return "rust"
+    reqs = nested_idx(data, "build-system", "requires") or []
+    if "zig" in (nested_idx(data, "tool", "fastship") or {}) or any(re.match(r"^ziglang(?:\W|$)", o) for o in reqs): return "zig"
+    return "python"
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +549,6 @@ class Release:
                 f"{CHANGELOG_MARKER.strip()!r}. Add it near the top of the file.")
         from nbdev.release import update_changelog
         txt = update_changelog(txt, self.cfg.version, res, CHANGELOG_MARKER)
-        shutil.copy(self.changefile, self.changefile.with_suffix(".bak"))
         self.changefile.write_text(txt, encoding="utf-8")
         run(f"git add {self.changefile}")
         return self
@@ -589,20 +602,58 @@ def _clean_dist(root: Path):
         if p.is_dir(): shutil.rmtree(p)
 
 
+async def _prepare_release(rel, no_changelog:bool = False, no_editor:bool = False, yes:bool = False):
+    if not no_changelog: await rel.changelog()
+    if not no_editor: subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
+    if not yes and not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
+
+
+def _commit_release(rel, push:bool = True):
+    if _git_has_changes(): run("git commit -am release")
+    if push: run("git push")
+
+
+def _build_dist(cfg, wheel_only:bool = False, quiet:bool = False):
+    os.chdir(cfg.root)
+    _clean_dist(cfg.root)
+    q = " --quiet" if quiet else ""
+    wheel = " --wheel" if wheel_only or cfg.wheel_only else ""
+    run(f"{sys.executable} -m build{wheel}{q}")
+    run("twine check dist/*")
+
+
+def _upload_dist(repository:str = "pypi", quiet:bool = False):
+    p = " --disable-progress-bar" if quiet else ""
+    run(f"twine upload --repository {repository}{p} dist/*")
+
+
 @call_parse
 def ship_pypi(
     repository: str = "pypi",  # Repository in ~/.pypirc (e.g. "pypi" or "testpypi")
     quiet: bool = False,  # Reduce output verbosity
+    wheel_only: bool = False,  # Build a wheel directly instead of building an sdist first
 ):
     "Build and upload the package to PyPI (uses `python -m build` + `twine upload`)."
     if (nbr := _nbdev_release()): return nbr.release_pypi(repository=repository, quiet=quiet)
     cfg = get_config()
-    os.chdir(cfg.root)
-    q = " --quiet" if quiet else ""
-    p = " --disable-progress-bar" if quiet else ""
-    _clean_dist(cfg.root)
-    run(f"{sys.executable} -m build{q}")
-    run(f"twine upload --repository {repository}{p} dist/*")
+    _build_dist(cfg, wheel_only=wheel_only, quiet=quiet)
+    _upload_dist(repository=repository, quiet=quiet)
+
+
+@call_parse
+async def ship_pages(
+    token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
+):
+    "Enable GitHub Pages from main:/ and use its URL as the repository homepage."
+    owner, repo = _git_owner_repo()
+    if not owner or not repo: raise SystemExit("Could not infer GitHub owner/repo from origin")
+    token = token or _get_token()
+    if not token: raise SystemExit("No GitHub token found")
+    gh = GhApi(owner, repo, token)
+    pages = await gh.repos.create_pages_site(build_type="legacy", source={"branch":"main", "path":"/"})
+    await gh.repos.update(homepage=pages.html_url)
+    print(f"GitHub Pages enabled: {pages.html_url}")
+    return pages.html_url
 
 
 @call_parse
@@ -627,13 +678,33 @@ async def ship_release_gh(
     if (nbr := _nbdev_release()):
         return await nbr.release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
     rel = Release(repo=repo, token=token)
-    if not no_changelog: await rel.changelog()
-    if not no_editor: subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
-    if not yes and not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
+    await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
+    _commit_release(rel)
+    print(f"GitHub release created: {(await rel.release()).cfg.version}")
 
-    if _git_has_changes(): run("git commit -am release")
+
+def _push_release_tag(cfg, remote:str = "origin"):
+    tag = f"v{cfg.version}"
+    os.chdir(cfg.root)
+    run(f"git tag -a {_q(tag)} -m {_q(tag)}")
+    run(f"git push {_q(remote)} {_q(cfg.branch)}")
+    run(f"git push {_q(remote)} {_q(tag)}")
+    return tag
+
+
+async def _ship_tag_release(kind:str, token:str = None, repo:str = None, no_changelog:bool = False,
+    no_editor:bool = False, yes:bool = False):
+    cfg = get_rs_config() if kind == "rust" else get_config()
+    rel = Release(repo=repo, token=token, cfg=cfg)
+    await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
+    _commit_release(rel, push=False)
+    version = cfg.version
+    tag = _push_release_tag(cfg)
+    ship_bump()
+    run("git commit -am bump")
     run("git push")
-    print(f"Released {(await rel.release()).cfg.version}")
+    print(f"Release started: {tag}")
+    return version
 
 
 @call_parse
@@ -644,13 +715,32 @@ async def ship_release(
     no_changelog: bool = False,  # Skip changelog generation (assumes CHANGELOG.md is ready)
     no_editor: bool = False,  # Skip opening CHANGELOG.md in an editor
     yes: bool = False,  # Release without asking for confirmation
+    wheel_only: bool = False,  # Build a wheel directly instead of building an sdist first
 ):
     "Release to GitHub and PyPI, bump the version, and push."
-    await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
-    ship_pypi(repository=repository)
+    if _nbdev_release():
+        await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
+        ship_pypi(repository=repository, wheel_only=wheel_only)
+        ship_bump()
+        run("git commit -am bump")
+        run("git push")
+        return
+    pyproj = _find_pyproject()
+    kind = _project_type(pyproj.parent, _load_toml(pyproj))
+    if kind != "python":
+        return await _ship_tag_release(kind, token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
+    rel = Release(repo=repo, token=token)
+    await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
+    _build_dist(rel.cfg, wheel_only=wheel_only)
+    _commit_release(rel)
+    version = rel.cfg.version
+    await rel.release()
+    print(f"GitHub release created: {version}")
+    _upload_dist(repository=repository)
     ship_bump()
     run("git commit -am bump")
     run("git push")
+    print(f"Released {version}")
 
 
 @call_parse
@@ -678,6 +768,16 @@ def ship_rs_build(
     run(_maturin_cmd("build", release=release, target=target, outdir=outdir, args=args))
 
 
+@call_parse
+def ship_zig_build(
+    quiet: bool = False,  # Reduce output verbosity
+):
+    "Build and check the current platform wheel for a fastship Zig project."
+    cfg = get_config()
+    if _project_type(cfg.root, cfg.data) != "zig": raise SystemExit("Not a fastship Zig project")
+    _build_dist(cfg, wheel_only=True, quiet=quiet)
+
+
 
 def ship_rs_bump(part: int = 2, unbump: bool = False):
     "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
@@ -695,13 +795,10 @@ def ship_rs_release(
     remote: str = "origin", # Git remote to push
     branch: str = None,     # Branch to push (defaults to [tool.fastship].branch/current branch)
 ):
-    "Tag `v<version>` and push branch plus tags, leaving CI to build/publish wheels."
+    "Tag `v<version>` and push the branch and that tag, leaving CI to build/publish wheels."
     cfg = get_rs_config()
-    os.chdir(cfg.root)
-    branch = branch or cfg.branch
-    run(f"git tag v{cfg.version}")
-    run(f"git push {remote} {branch} --tags")
-    print(f"Released v{cfg.version}")
+    if branch: cfg.branch = branch
+    print(f"Release started: {_push_release_tag(cfg, remote)}")
 
 
 
@@ -717,6 +814,17 @@ def _slugify_pkg(name:str)->str:
     if not pkg: pkg = "pkg"
     if re.match(r"^\d", pkg): pkg = "pkg_" + pkg
     return pkg
+
+def _git_cfg(key:str)->str:
+    "A git config value, or '' when unset."
+    try: return run(f"git config --get {key}").strip()
+    except OSError: return ""
+
+def _authors_toml(proj_name:str)->str:
+    "pyproject `authors` entry from git's global config, else a generic contributors entry."
+    name,email = _git_cfg("user.name"),_git_cfg("user.email")
+    if not name: return f'{{name = "{proj_name} contributors"}}'
+    return f'{{name = "{name}", email = "{email}"}}' if email else f'{{name = "{name}"}}'
 
 def _slugify_dist(name:str)->str:
     "Best-effort convert a project name to a PyPI/Cargo-style distribution name."
@@ -750,7 +858,7 @@ description = \"{desc}\"
 readme = \"README.md\"
 requires-python = \">=3.10\"
 license = {{ text = \"Apache-2.0\" }}
-authors = [{{ name = \"{proj_name} contributors\" }}]
+authors = [{_authors_toml(proj_name)}]
 classifiers = [
   \"Programming Language :: Python :: 3\",
   \"Programming Language :: Python :: 3 :: Only\",
@@ -803,8 +911,7 @@ ship-bump --part 0   # major
 2) Run:
 
 ```bash
-ship-gh
-ship-pypi
+ship-release
 ```
 """
 
@@ -822,6 +929,7 @@ venv/
 .env
 .DS_Store
 .ipynb_checkpoints/
+Cargo.lock
 """
 
 def _template_manifest()->str:
@@ -833,6 +941,11 @@ include CHANGELOG.md
 def _read_license():
     "Read the Apache 2.0 license from the package."
     return importlib.resources.files("fastship").joinpath("LICENSE").read_text(encoding="utf-8")
+
+def _read_asset(name:str)->str: return importlib.resources.files("fastship").joinpath(*Path(name).parts).read_text(encoding="utf-8")
+
+def _write_site(root:Path):
+    for name in ("_config.yml", "_layouts/default.html"): _write(root/name, _read_asset(name))
 
 def _template_rs_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return f"""[build-system]
@@ -846,7 +959,7 @@ description = \"{desc}\"
 license = {{text = \"Apache-2.0\"}}
 requires-python = \">=3.10\"
 readme = \"README.md\"
-authors = [{{name = \"{proj_name} contributors\"}}]
+authors = [{_authors_toml(proj_name)}]
 classifiers = [
     \"Programming Language :: Rust\",
     \"Programming Language :: Python :: Implementation :: CPython\",
@@ -944,15 +1057,12 @@ ship-rs-build
 
 ## Release
 
-Release flow is: release first, then bump.
-
 ```bash
 maturin develop && pytest -q
-ship-rs-release
-ship-bump
+ship-release
 ```
 
-The GitHub workflow builds wheels on tags matching `v*` and publishes them to GitHub Releases and PyPI.
+`ship-release` tags the Cargo version, leaves wheel publication to GitHub Actions, then bumps the project.
 """
 
 def _template_rs_dev()->str:
@@ -971,12 +1081,11 @@ The canonical version lives in `Cargo.toml`. `pyproject.toml` gets the Python pa
 
 ## Release
 
-Release flow is: release first, then bump.
-
 1. Run `maturin develop && pytest -q`.
 2. Confirm the release version in `Cargo.toml` (`[package].version`).
-3. Run `ship-rs-release`.
-4. After pushing the release tag, run `ship-bump`, commit the `Cargo.toml` version bump, and push to `main` without a tag.
+3. Run `ship-release`.
+
+Fastship commits the changelog, pushes the version tag for GitHub Actions, then bumps and pushes `Cargo.toml`.
 """
 
 def _template_rs_workflow()->str:
@@ -1052,6 +1161,295 @@ jobs:
           packages-dir: dist/
 """
 
+def _template_zig_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
+    return f"""[build-system]
+requires = ["setuptools>=77", "wheel", "ziglang==0.15.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "{proj_name}"
+dynamic = ["version"]
+description = "{desc}"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{_authors_toml(proj_name)}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = ["cffi"]
+
+[project.optional-dependencies]
+dev = ["fastship", "build", "cibuildwheel~=3.4", "ziglang==0.15.2", "pytest"]
+
+[project.urls]
+Homepage = "https://github.com/{gh_org}/{proj_name}"
+
+[tool.setuptools.dynamic]
+version = {{ attr = "{pkg_name}.__version__" }}
+
+[tool.setuptools.packages.find]
+include = ["{pkg_name}"]
+
+[tool.setuptools.package-data]
+{pkg_name} = ["_lib/*"]
+
+[tool.fastship]
+branch = "main"
+wheel-only = true
+
+[tool.fastship.zig]
+version = "0.15.2"
+
+[tool.cibuildwheel]
+build = "cp311-*"
+skip = "*-musllinux_* *-win32"
+test-requires = "pytest"
+test-command = "pytest {{project}}/tests"
+
+[tool.cibuildwheel.macos]
+environment = {{ MACOSX_DEPLOYMENT_TARGET = "13.0" }}
+"""
+
+def _template_zig_setup()->str:
+    return r"""import subprocess,sys
+from pathlib import Path
+from setuptools import Distribution,setup
+from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
+
+class BinaryDistribution(Distribution):
+    def has_ext_modules(self): return True
+
+class BinaryWheel(_bdist_wheel):
+    def get_tag(self):
+        _,_,plat = super().get_tag()
+        return 'py3','none',plat
+
+    def run(self):
+        subprocess.run([sys.executable, str(Path(__file__).with_name('build_lib.py'))], check=True)
+        super().run()
+
+setup(cmdclass={'bdist_wheel': BinaryWheel}, distclass=BinaryDistribution)
+"""
+
+def _template_zig_build(pkg_name:str)->str:
+    return f'''import importlib.metadata,subprocess,sys,tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).parent
+
+def _name():
+    if sys.platform == "darwin": return "lib{pkg_name}.dylib"
+    if sys.platform == "win32": return "{pkg_name}.dll"
+    return "lib{pkg_name}.so"
+
+def main():
+    with open(ROOT/"pyproject.toml", "rb") as f: version = tomllib.load(f)["tool"]["fastship"]["zig"]["version"]
+    if (found := importlib.metadata.version("ziglang")) != version: sys.exit(f"ziglang is {{found}}; expected {{version}}")
+    dest = ROOT/"{pkg_name}"/"_lib"
+    dest.mkdir(exist_ok=True)
+    out = dest/_name()
+    subprocess.run([sys.executable, "-m", "ziglang", "build-lib", "src/lib.zig", "-dynamic", "-O", "ReleaseFast", f"-femit-bin={{out}}"], cwd=ROOT, check=True)
+    print(f"Bundled: {{out.name}}")
+
+if __name__ == "__main__": main()
+'''
+
+def _template_zig_lib()->str:
+    return r"""export fn add(a: c_int, b: c_int) c_int {
+    return a + b;
+}
+"""
+
+def _template_zig_ffi(pkg_name:str)->str:
+    return f'''import sys
+from pathlib import Path
+from cffi import FFI
+
+def _name():
+    if sys.platform == "darwin": return "lib{pkg_name}.dylib"
+    if sys.platform == "win32": return "{pkg_name}.dll"
+    return "lib{pkg_name}.so"
+
+ffi = FFI()
+ffi.cdef("int add(int a, int b);")
+lib = ffi.dlopen(str(Path(__file__).parent/"_lib"/_name()))
+
+def add(a, b): return lib.add(a, b)
+'''
+
+def _template_zig_init()->str:
+    return r'''__version__ = "0.1.0"
+
+from ._ffi import add
+
+__all__ = ["add"]
+'''
+
+def _template_zig_test(pkg_name:str)->str:
+    return f'''from {pkg_name} import add
+
+def test_add(): assert add(2, 3) == 5
+'''
+
+def _template_zig_manifest(pkg_name:str)->str:
+    return f"""include README.md
+include LICENSE
+include CHANGELOG.md
+include build_lib.py
+include setup.py
+recursive-include src *.zig
+recursive-exclude {pkg_name}/_lib *
+"""
+
+def _template_zig_readme(proj_name:str)->str:
+    return f"""# {proj_name}
+
+Python CFFI bindings over a bundled Zig shared library, scaffolded by fastship.
+
+## Development
+
+```bash
+pip install -e .[dev]
+python build_lib.py
+pytest -q
+```
+
+## Build
+
+```bash
+ship-zig-build
+```
+
+## Release
+
+```bash
+ship-release
+```
+
+The GitHub workflow builds one Python-ABI-independent wheel for each supported platform and publishes tagged releases to GitHub and PyPI.
+"""
+
+def _template_zig_dev()->str:
+    return r"""# Development
+
+`src/lib.zig` exports the C ABI consumed by the CFFI declarations in the Python package. `build_lib.py` compiles and bundles the shared library.
+
+## Commands
+
+```bash
+python build_lib.py
+pytest -q
+ship-zig-build
+```
+
+`ship-release` generates the changelog, tags the current version, and leaves the wheel matrix and trusted publication to GitHub Actions.
+"""
+
+def _template_zig_workflow()->str:
+    return r"""name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            arch: x86_64
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            arch: aarch64
+          - name: macos-arm64
+            os: macos-latest
+            arch: arm64
+          - name: macos-x86_64
+            os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pypa/cibuildwheel@v3.4.1
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+        with:
+          output-dir: wheelhouse
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.name }}
+          path: wheelhouse/*.whl
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.whl
+          generate_release_notes: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+"""
+
+def _create_zig_project(name:str, package:str = None, description:str = "A Zig-backed Python package",
+    path:str = ".", gh_org:str = "AnswerDotAI", force:bool = False):
+    proj = _slugify_dist(name)
+    pkg = package or _slugify_pkg(proj)
+    root = _prepare_new_root(Path(path)/proj, force)
+    _write(root/"pyproject.toml", _template_zig_pyproject(proj, pkg, description, gh_org))
+    _write(root/"setup.py", _template_zig_setup())
+    _write(root/"build_lib.py", _template_zig_build(pkg))
+    _write(root/"src"/"lib.zig", _template_zig_lib())
+    _write(root/pkg/"__init__.py", _template_zig_init())
+    _write(root/pkg/"_ffi.py", _template_zig_ffi(pkg))
+    _write(root/"tests"/"test_basic.py", _template_zig_test(pkg))
+    _write(root/"README.md", _template_zig_readme(proj))
+    _write(root/"DEV.md", _template_zig_dev())
+    _write(root/"CHANGELOG.md", f"{CHANGELOG_MARKER}\n")
+    _write(root/"LICENSE", _read_license())
+    _write(root/"MANIFEST.in", _template_zig_manifest(pkg))
+    _write(root/".gitignore", _template_gitignore())
+    _write(root/".github"/"workflows"/"ci.yml", _template_zig_workflow())
+    _write_site(root)
+    return root
+
+@call_parse
+def ship_zig_new(
+    name: str,              # Project name (PyPI name), e.g. "my-project"
+    package: str = None,    # Python package import name (defaults from `name`)
+    description: str = "A Zig-backed Python package",  # Short project description
+    path: str = ".",        # Directory to create the project folder in
+    gh_org: str = "AnswerDotAI",  # GitHub organization for project.urls
+    force: bool = False,    # Overwrite if the folder already exists
+):
+    "Create a CFFI/Zig project with platform wheels and trusted tag publishing."
+    root = _create_zig_project(name, package=package, description=description, path=path, gh_org=gh_org, force=force)
+    print(f"Created {root}")
+    print(f"Next:\n  cd {root}")
+    print("  pip install -e .[dev]")
+    print("  python build_lib.py && pytest -q")
+    return root
+
 def _create_rs_project(name:str, package:str = None, description:str = "A PyO3 package", path:str = ".", gh_org:str = "AnswerDotAI", force:bool = False):
     "Create a maturin/PyO3 project and return its root."
     proj = _slugify_dist(name)
@@ -1068,6 +1466,7 @@ def _create_rs_project(name:str, package:str = None, description:str = "A PyO3 p
     _write(root/"LICENSE", _read_license())
     _write(root/".gitignore", _template_gitignore())
     _write(root/".github"/"workflows"/"ci.yml", _template_rs_workflow())
+    _write_site(root)
     return root
 
 @call_parse
@@ -1109,6 +1508,7 @@ def ship_new(
     _write(root/"MANIFEST.in", _template_manifest())
     _write(root/".gitignore", _template_gitignore())
     _write(root/pkg/"__init__.py", '__version__ = "0.1.0"\n')
+    _write_site(root)
 
     print(f"Created {root}")
     print(f"Next:\n  cd {root}")
