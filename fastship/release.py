@@ -978,6 +978,9 @@ features = [\"extension-module\"]
 python-source = \"python\"
 module-name = \"{pkg_name}._core\"
 
+[tool.uv]
+cache-keys = [{{ file = \"pyproject.toml\" }}, {{ file = \"src/**/*.rs\" }}, {{ file = \"Cargo.toml\" }}, {{ file = \"Cargo.lock\" }}]
+
 [tool.fastship]
 branch = \"main\"
 
