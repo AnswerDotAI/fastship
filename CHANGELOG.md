@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.1.2
+
+### New Features
+
+- ship-release dispatches npm and Rust/Zig tag-push flows flag-free, with dirty-tree guards, replacing ship-rs-release ([#29](https://github.com/AnswerDotAI/fastship/pull/29)), thanks to [@jph00](https://github.com/jph00)
+
+
 ## 0.1.1
 
 ### New Features
