@@ -51,7 +51,6 @@ ship-rs-new = "fastship.release:ship_rs_new"
 ship-pr = "fastship.release:ship_pr"
 ship-rs-init = "fastship.release:ship_rs_init"
 ship-rs-build = "fastship.release:ship_rs_build"
-ship-rs-release = "fastship.release:ship_rs_release"
 ship-zig-new = "fastship.release:ship_zig_new"
 ship-zig-build = "fastship.release:ship_zig_build"
 
