@@ -63,3 +63,31 @@ def test_ship_bump_routes_to_init_when_no_cargo_toml(tmp_path, monkeypatch):
     relmod.ship_bump(part=1)
 
     assert '__version__ = "0.2.0"' in (pkg / "__init__.py").read_text(encoding="utf-8")
+
+
+def test_ship_tag_release_needs_no_token_or_flags(tmp_path, monkeypatch):
+    # The rust flow is pure tag-push: no changelog machinery, no GitHub client, no prompts.
+    _make_rs_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "_git_has_changes", lambda: False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("FASTSHIP_TOKEN", raising=False)
+    calls = []
+    monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: calls.append(cmd))
+
+    relmod._ship_tag_release("rust")
+
+    assert any("git tag" in c and "v0.1.2" in c for c in calls)
+    assert any(c == "git push origin v0.1.2" for c in calls)
+    assert 'version = "0.1.3"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")  # patch bump after the tag
+    assert calls.index("git commit -am bump") > calls.index("git push origin v0.1.2")
+
+
+def test_ship_tag_release_refuses_dirty_tree(tmp_path, monkeypatch):
+    _make_rs_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "_git_has_changes", lambda: True)
+
+    import pytest
+    with pytest.raises(SystemExit, match="Uncommitted changes"):
+        relmod._ship_tag_release("rust")

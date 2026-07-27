@@ -219,7 +219,8 @@ ship-release        # generate changelog, release, bump version, push
 `ship-release` selects the project type automatically:
 
 - Plain Python projects build and check the distribution before creating the GitHub release, upload it to PyPI, then bump.
-- Maturin and fastship Zig projects commit the changelog, push one annotated version tag for their trusted-publishing workflow, then bump.
+- Maturin and fastship Zig projects push one annotated version tag for their trusted-publishing workflow, then bump - no changelog step, no prompts, no token needed.
+- npm projects (a `package.json` with no `pyproject.toml` anywhere nearer) refuse a dirty tree, push one annotated version tag for their trusted-publishing workflow, then bump `package.json`. Maturin and Zig releases refuse a dirty tree the same way.
 
 The final `Released` message is printed only after the full local publishing workflow succeeds. Tag-driven native releases print `Release started` because CI owns publication.
 

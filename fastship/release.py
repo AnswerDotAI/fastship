@@ -6,11 +6,11 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 """
 
 
-__all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "get_config", "get_rs_config", "bump_version", "Release",
+__all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "NpmConfig", "get_config", "get_rs_config", "get_npm_config", "bump_version", "Release",
     "ship_bump", "ship_pages", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
-    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_rs_release", "ship_zig_new", "ship_zig_build"]
+    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_zig_new", "ship_zig_build"]
 
-import os, re, sys, shutil, subprocess, ast, importlib.resources, shlex
+import os, re, sys, json, shutil, subprocess, ast, importlib.resources, shlex
 from dataclasses import dataclass
 
 try: import tomllib
@@ -44,6 +44,16 @@ def _find_pyproject(start: Path | None = None, fname: str = _pyproj) -> Path:
     p = cfg_path / fname
     if not p.exists(): raise FileNotFoundError(f"Could not find {fname} (searched parents from {Path().absolute()})")
     return p
+
+
+def _find_project(start: Path | None = None) -> tuple[str, Path]:
+    "Nearest project marker up the tree: ('py', pyproject.toml) or ('npm', package.json), pyproject winning ties."
+    p = Path(start or Path().absolute())
+    while True:
+        if (p / _pyproj).exists(): return "py", p / _pyproj
+        if (p / "package.json").exists(): return "npm", p / "package.json"
+        if p == p.parent: raise FileNotFoundError(f"Could not find {_pyproj} or package.json (searched parents from {Path().absolute()})")
+        p = p.parent
 
 
 def _load_toml(p: Path) -> dict: return tomllib.loads(p.read_text(encoding="utf-8"))
@@ -228,6 +238,36 @@ def _project_type(root:Path, data:dict)->str:
     reqs = nested_idx(data, "build-system", "requires") or []
     if "zig" in (nested_idx(data, "tool", "fastship") or {}) or any(re.match(r"^ziglang(?:\W|$)", o) for o in reqs): return "zig"
     return "python"
+
+
+@dataclass
+class NpmConfig:
+    root: Path
+    pkg_json: Path
+    name: str
+    branch: str
+
+    @property
+    def version(self) -> str:
+        v = json.loads(self.pkg_json.read_text(encoding="utf-8")).get("version")
+        if not v: raise ValueError(f"No version field found in {self.pkg_json}")
+        return v
+
+
+def get_npm_config(start: str | Path | None = None) -> NpmConfig:
+    "Load fastship config for an npm (package.json, no pyproject.toml) project."
+    pkg_json = _find_pyproject(start, fname="package.json")
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    branch = os.getenv("FASTSHIP_BRANCH") or _git_branch()
+    return NpmConfig(root=pkg_json.parent, pkg_json=pkg_json, name=data.get("name", ""), branch=branch)
+
+
+def _write_npm_version(pkg_json: Path, version: str):
+    "Rewrite the `version` field in place, preserving the file's formatting."
+    txt = pkg_json.read_text(encoding="utf-8")
+    new, n = re.subn(r'("version"\s*:\s*)"[^"]*"', rf'\g<1>"{version}"', txt, count=1)
+    if not n: raise ValueError(f"No version field found in {pkg_json}")
+    pkg_json.write_text(new, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -584,9 +624,13 @@ def ship_bump(
     part: int = 2,  # Part of version to bump (0=major, 1=minor, 2=patch)
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
-    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust projects; else `__init__.py`."
+    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust; package.json for npm; else `__init__.py`."
     if (nbr := _nbdev_release()): return nbr.nbdev_bump_version(part=part, unbump=unbump)
-    if (_find_pyproject().parent / "Cargo.toml").exists(): return ship_rs_bump(part=part, unbump=unbump)
+    ftype, pyproj = _find_project()
+    if ftype == "npm":
+        _npm_bump(part=part, unbump=unbump)
+        return
+    if (pyproj.parent / "Cargo.toml").exists(): return ship_rs_bump(part=part, unbump=unbump)
     cfg = get_config()
     print(f"Old version: {cfg.version}")
     new = bump_version(cfg.version, part=part, unbump=unbump)
@@ -692,12 +736,35 @@ def _push_release_tag(cfg, remote:str = "origin"):
     return tag
 
 
-async def _ship_tag_release(kind:str, token:str = None, repo:str = None, no_changelog:bool = False,
-    no_editor:bool = False, yes:bool = False):
+def _npm_bump(part:int = 2, unbump:bool = False):
+    cfg = get_npm_config()
+    print(f"Old version: {cfg.version}")
+    new = bump_version(cfg.version, part=part, unbump=unbump)
+    _write_npm_version(cfg.pkg_json, new)
+    print(f"New version: {new}")
+    return new
+
+
+def _ship_npm_release(remote:str = "origin"):
+    "Tag `v<version>` and push branch + tag (CI publishes to npm and creates the GitHub release), then bump."
+    cfg = get_npm_config()
+    os.chdir(cfg.root)
+    if _git_has_changes(): raise SystemExit("Uncommitted changes: commit or stash before releasing")
+    version = cfg.version
+    tag = _push_release_tag(cfg)
+    _npm_bump()
+    run("git commit -am bump")
+    run("git push")
+    print(f"Release started: {tag}")
+    return version
+
+
+
+def _ship_tag_release(kind:str):
+    "Tag `v<version>` and push branch + tag (CI builds, publishes, and writes release notes), then bump."
     cfg = get_rs_config() if kind == "rust" else get_config()
-    rel = Release(repo=repo, token=token, cfg=cfg)
-    await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
-    _commit_release(rel, push=False)
+    os.chdir(cfg.root)
+    if _git_has_changes(): raise SystemExit("Uncommitted changes: commit or stash before releasing")
     version = cfg.version
     tag = _push_release_tag(cfg)
     ship_bump()
@@ -712,12 +779,12 @@ async def ship_release(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,   # Override repo ("OWNER/REPO")
     repository: str = "pypi",  # PyPI repository in ~/.pypirc
-    no_changelog: bool = False,  # Skip changelog generation (assumes CHANGELOG.md is ready)
-    no_editor: bool = False,  # Skip opening CHANGELOG.md in an editor
-    yes: bool = False,  # Release without asking for confirmation
+    no_changelog: bool = False,  # Skip changelog generation (Python/nbdev flow only)
+    no_editor: bool = False,  # Skip opening CHANGELOG.md in an editor (Python/nbdev flow only)
+    yes: bool = False,  # Release without asking for confirmation (Python/nbdev flow; tag-push flows never ask)
     wheel_only: bool = False,  # Build a wheel directly instead of building an sdist first
 ):
-    "Release to GitHub and PyPI, bump the version, and push."
+    "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm."
     if _nbdev_release():
         await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
         ship_pypi(repository=repository, wheel_only=wheel_only)
@@ -725,10 +792,15 @@ async def ship_release(
         run("git commit -am bump")
         run("git push")
         return
-    pyproj = _find_pyproject()
+    ftype, proj = _find_project()
+    if ftype == "npm":
+        _ship_npm_release()
+        return
+    pyproj = proj
     kind = _project_type(pyproj.parent, _load_toml(pyproj))
     if kind != "python":
-        return await _ship_tag_release(kind, token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
+        _ship_tag_release(kind)
+        return
     rel = Release(repo=repo, token=token)
     await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
     _build_dist(rel.cfg, wheel_only=wheel_only)
@@ -789,16 +861,6 @@ def ship_rs_bump(part: int = 2, unbump: bool = False):
     os.chdir(cfg.root)
     run("maturin develop")
 
-
-@call_parse
-def ship_rs_release(
-    remote: str = "origin", # Git remote to push
-    branch: str = None,     # Branch to push (defaults to [tool.fastship].branch/current branch)
-):
-    "Tag `v<version>` and push the branch and that tag, leaving CI to build/publish wheels."
-    cfg = get_rs_config()
-    if branch: cfg.branch = branch
-    print(f"Release started: {_push_release_tag(cfg, remote)}")
 
 
 
