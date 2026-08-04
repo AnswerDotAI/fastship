@@ -666,9 +666,10 @@ def _build_dist(cfg, wheel_only:bool = False, quiet:bool = False):
     run("twine check dist/*")
 
 
-def _upload_dist(repository:str = "pypi", quiet:bool = False):
+def _upload_dist(repository:str = "pypi", quiet:bool = False, verbose:bool = False):
     p = " --disable-progress-bar" if quiet else ""
-    run(f"twine upload --repository {repository}{p} dist/*")
+    v = " --verbose" if verbose else ""
+    run(f"twine upload{v} --repository {repository}{p} dist/*")
 
 
 @call_parse
@@ -676,12 +677,13 @@ def ship_pypi(
     repository: str = "pypi",  # Repository in ~/.pypirc (e.g. "pypi" or "testpypi")
     quiet: bool = False,  # Reduce output verbosity
     wheel_only: bool = False,  # Build a wheel directly instead of building an sdist first
+    verbose: bool = False,  # Pass --verbose to twine upload
 ):
     "Build and upload the package to PyPI (uses `python -m build` + `twine upload`)."
-    if (nbr := _nbdev_release()): return nbr.release_pypi(repository=repository, quiet=quiet)
+    if (nbr := _nbdev_release()): return nbr.release_pypi(repository=repository, quiet=quiet, verbose=verbose)
     cfg = get_config()
     _build_dist(cfg, wheel_only=wheel_only, quiet=quiet)
-    _upload_dist(repository=repository, quiet=quiet)
+    _upload_dist(repository=repository, quiet=quiet, verbose=verbose)
 
 
 @call_parse
@@ -783,11 +785,12 @@ async def ship_release(
     no_editor: bool = False,  # Skip opening CHANGELOG.md in an editor (Python/nbdev flow only)
     yes: bool = False,  # Release without asking for confirmation (Python/nbdev flow; tag-push flows never ask)
     wheel_only: bool = False,  # Build a wheel directly instead of building an sdist first
+    verbose: bool = False,  # Pass --verbose to twine upload
 ):
     "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm."
     if _nbdev_release():
         await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
-        ship_pypi(repository=repository, wheel_only=wheel_only)
+        ship_pypi(repository=repository, wheel_only=wheel_only, verbose=verbose)
         ship_bump()
         run("git commit -am bump")
         run("git push")
@@ -808,7 +811,7 @@ async def ship_release(
     version = rel.cfg.version
     await rel.release()
     print(f"GitHub release created: {version}")
-    _upload_dist(repository=repository)
+    _upload_dist(repository=repository, verbose=verbose)
     ship_bump()
     run("git commit -am bump")
     run("git push")
