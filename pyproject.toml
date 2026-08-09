@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-  "fastcore>=1.14.3",
+  "fastcore>=2.2.6",
   "fastgit>=0.0.7",
   "nbdev>=3.3.5",
   "ghapi>=2.0.0",

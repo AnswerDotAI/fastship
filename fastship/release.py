@@ -577,8 +577,7 @@ class Release:
 
         res = f"\n## {self.cfg.version}\n\n"
         issues = await parallel_async(self._issues, self.groups.keys())
-        sections = (_issues_txt(*o) for o in zip(issues, self.groups.values()))
-        res += "\n\n".join(filter(None, sections))
+        res += "\n\n".join(issues.map_zipwith(_issues_txt, self.groups.values()).filter())
 
         if debug: return res
 
