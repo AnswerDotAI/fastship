@@ -47,12 +47,13 @@ def _find_pyproject(start: Path | None = None, fname: str = _pyproj) -> Path:
 
 
 def _find_project(start: Path | None = None) -> tuple[str, Path]:
-    "Nearest project marker up the tree: ('py', pyproject.toml) or ('npm', package.json), pyproject winning ties."
+    "Nearest project marker up the tree: ('py', pyproject.toml), ('npm', package.json), or ('crate', Cargo.toml), in that priority order."
     p = Path(start or Path().absolute())
     while True:
         if (p / _pyproj).exists(): return "py", p / _pyproj
         if (p / "package.json").exists(): return "npm", p / "package.json"
-        if p == p.parent: raise FileNotFoundError(f"Could not find {_pyproj} or package.json (searched parents from {Path().absolute()})")
+        if (p / "Cargo.toml").exists(): return "crate", p / "Cargo.toml"
+        if p == p.parent: raise FileNotFoundError(f"Could not find {_pyproj}, package.json, or Cargo.toml (searched parents from {Path().absolute()})")
         p = p.parent
 
 
@@ -268,6 +269,34 @@ def _write_npm_version(pkg_json: Path, version: str):
     new, n = re.subn(r'("version"\s*:\s*)"[^"]*"', rf'\g<1>"{version}"', txt, count=1)
     if not n: raise ValueError(f"No version field found in {pkg_json}")
     pkg_json.write_text(new, encoding="utf-8")
+
+
+@dataclass
+class CrateConfig:
+    root: Path
+    manifest_path: Path
+    name: str
+    branch: str
+
+    @property
+    def version(self) -> str: return _cargo_version(self.manifest_path)
+
+
+def get_crate_config(start: str | Path | None = None) -> CrateConfig:
+    "Load fastship config for a pure-Rust crate (Cargo.toml, no pyproject.toml)."
+    manifest = _find_pyproject(start, fname="Cargo.toml")
+    data = _load_toml(manifest)
+    branch = os.getenv("FASTSHIP_BRANCH") or _git_branch()
+    return CrateConfig(root=manifest.parent, manifest_path=manifest, name=nested_idx(data, "package", "name") or "", branch=branch)
+
+
+def _crate_bump(part:int = 2, unbump:bool = False):
+    cfg = get_crate_config()
+    print(f"Old version: {cfg.version}")
+    new = bump_version(cfg.version, part=part, unbump=unbump)
+    _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
+    print(f"New version: {new}")
+    return new
 
 
 # ---------------------------------------------------------------------------
@@ -623,11 +652,14 @@ def ship_bump(
     part: int = 2,  # Part of version to bump (0=major, 1=minor, 2=patch)
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
-    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust; package.json for npm; else `__init__.py`."
+    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust (pure crates skip the reinstall); package.json for npm; else `__init__.py`."
     if (nbr := _nbdev_release()): return nbr.nbdev_bump_version(part=part, unbump=unbump)
     ftype, pyproj = _find_project()
     if ftype == "npm":
         _npm_bump(part=part, unbump=unbump)
+        return
+    if ftype == "crate":
+        _crate_bump(part=part, unbump=unbump)
         return
     if (pyproj.parent / "Cargo.toml").exists(): return ship_rs_bump(part=part, unbump=unbump)
     cfg = get_config()
@@ -763,7 +795,7 @@ def _ship_npm_release(remote:str = "origin"):
 
 def _ship_tag_release(kind:str):
     "Tag `v<version>` and push branch + tag (CI builds, publishes, and writes release notes), then bump."
-    cfg = get_rs_config() if kind == "rust" else get_config()
+    cfg = get_crate_config() if kind == "crate" else get_rs_config() if kind == "rust" else get_config()
     os.chdir(cfg.root)
     if _git_has_changes(): raise SystemExit("Uncommitted changes: commit or stash before releasing")
     version = cfg.version
@@ -786,7 +818,7 @@ async def ship_release(
     wheel_only: bool = False,  # Build a wheel directly instead of building an sdist first
     verbose: bool = False,  # Pass --verbose to twine upload
 ):
-    "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm."
+    "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm/crate projects."
     if _nbdev_release():
         await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
         ship_pypi(repository=repository, wheel_only=wheel_only, verbose=verbose)
@@ -797,6 +829,9 @@ async def ship_release(
     ftype, proj = _find_project()
     if ftype == "npm":
         _ship_npm_release()
+        return
+    if ftype == "crate":
+        _ship_tag_release("crate")
         return
     pyproj = proj
     kind = _project_type(pyproj.parent, _load_toml(pyproj))
@@ -1553,6 +1588,121 @@ def ship_rs_new(
     print("  pip install -e .[dev]")
     print("  maturin develop && pytest -q")
 
+
+def _template_crate_cargo_toml(proj_name:str, desc:str, gh_org:str)->str:
+    return f"""[package]
+name = \"{proj_name}\"
+version = \"0.1.0\"
+edition = \"2024\"
+license = \"Apache-2.0\"
+description = \"{desc}\"
+repository = \"https://github.com/{gh_org}/{proj_name}\"
+
+[dependencies]
+"""
+
+def _template_crate_lib()->str:
+    return """pub fn hello(name: &str) -> String {
+    format!("Hello, {name}!")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hello_works() {
+        assert_eq!(hello("fastship"), "Hello, fastship!");
+    }
+}
+"""
+
+def _template_crate_readme(proj_name:str, desc:str)->str:
+    return f"""# {proj_name}
+
+{desc}
+
+## Development
+
+```bash
+cargo test
+```
+
+## Release
+
+```bash
+cargo test
+ship-release
+```
+
+`ship-release` tags the Cargo version and pushes; CI publishes to crates.io via trusted publishing and creates the GitHub release, then fastship bumps `Cargo.toml`.
+
+First release only: register this repo's `ci.yml` as a trusted publisher for the crate on crates.io before tagging.
+"""
+
+def _template_crate_workflow()->str:
+    return """name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+"""
+
+def _create_crate_project(name:str, description:str = "A Rust crate", path:str = ".", gh_org:str = "AnswerDotAI", force:bool = False):
+    "Create a pure-Rust crate project and return its root."
+    proj = _slugify_dist(name)
+    root = _prepare_new_root(Path(path) / proj, force)
+    _write(root/"Cargo.toml", _template_crate_cargo_toml(proj, description, gh_org))
+    _write(root/"src"/"lib.rs", _template_crate_lib())
+    _write(root/"README.md", _template_crate_readme(proj, description))
+    _write(root/"LICENSE", _read_license())
+    _write(root/".gitignore", _template_gitignore())
+    _write(root/".github"/"workflows"/"ci.yml", _template_crate_workflow())
+    return root
+
+@call_parse
+def ship_crate_new(
+    name: str,              # Crate name (crates.io name), e.g. "my-crate"
+    description: str = "A Rust crate",  # Short crate description
+    path: str = ".",        # Directory to create the project folder in
+    gh_org: str = "AnswerDotAI",  # GitHub organization for [package].repository
+    force: bool = False,    # Overwrite if the folder already exists
+):
+    "Create a pure-Rust crate wired for fastship tag releases and crates.io trusted publishing."
+    root = _create_crate_project(name, description=description, path=path, gh_org=gh_org, force=force)
+    print(f"Created {root}")
+    print(f"Next:\n  cd {root}")
+    print("  cargo test")
+    return root
 
 
 @call_parse
