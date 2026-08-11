@@ -290,8 +290,8 @@ def get_crate_config(start: str | Path | None = None) -> CrateConfig:
     return CrateConfig(root=manifest.parent, manifest_path=manifest, name=nested_idx(data, "package", "name") or "", branch=branch)
 
 
-def _crate_bump(part:int = 2, unbump:bool = False):
-    cfg = get_crate_config()
+def _cargo_bump(cfg, part:int = 2, unbump:bool = False):
+    "Bump `[package].version` in Cargo.toml, printing old and new."
     print(f"Old version: {cfg.version}")
     new = bump_version(cfg.version, part=part, unbump=unbump)
     _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
@@ -640,9 +640,11 @@ class Release:
 
 
 def _nbdev_release():
-    "The `nbdev.release` module if this is an nbdev project, else `None`."
+    "The `nbdev.release` module if the nbdev flow releases this project; None for non-nbdev projects, and for nbdev-docs-over-maturin repos, which the tag flow releases."
     from nbdev.config import is_nbdev
     if not is_nbdev(): return None
+    pyproj = _find_pyproject()
+    if _project_type(pyproj.parent, _load_toml(pyproj)) != "python": return None
     import nbdev.release
     return nbdev.release
 
@@ -659,7 +661,7 @@ def ship_bump(
         _npm_bump(part=part, unbump=unbump)
         return
     if ftype == "crate":
-        _crate_bump(part=part, unbump=unbump)
+        _cargo_bump(get_crate_config(), part=part, unbump=unbump)
         return
     if (pyproj.parent / "Cargo.toml").exists(): return ship_rs_bump(part=part, unbump=unbump)
     cfg = get_config()
@@ -891,10 +893,7 @@ def ship_zig_build(
 def ship_rs_bump(part: int = 2, unbump: bool = False):
     "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
     cfg = get_rs_config()
-    old = cfg.version
-    new = bump_version(old, part=part, unbump=unbump)
-    _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
-    print(f"{old} -> {new}")
+    _cargo_bump(cfg, part=part, unbump=unbump)
     os.chdir(cfg.root)
     run("maturin develop")
 
