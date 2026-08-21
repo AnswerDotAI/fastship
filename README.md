@@ -28,13 +28,21 @@ This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, R
 
 ### `ship-bump`
 
-Bump a version part (0=major, 1=minor, 2=patch). For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps `[package].version` in `Cargo.toml` and runs `maturin develop`; otherwise it rewrites `__version__` in your package `__init__.py`:
+Bump a version part (0=major, 1=minor, 2=patch). For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps `[package].version` in `Cargo.toml` and runs `maturin develop`; otherwise it rewrites a static `[project].version` when present, or `__version__` in your package `__init__.py`:
 
 ```bash
 ship-bump --part 2
 ship-bump --part 1
 ship-bump --part 0
 ```
+
+With a post-release version, the default command increments the post component:
+
+```text
+0.0.2026082005.post1 → 0.0.2026082005.post2
+```
+
+Supplying `--part` explicitly bumps that release component and removes the post component.
 
 Decrement instead:
 
@@ -221,6 +229,25 @@ ship-release        # generate changelog, release, bump version, push
 - Plain Python projects build and check the distribution before creating the GitHub release, upload it to PyPI, then bump.
 - Maturin and fastship Zig projects push one annotated version tag for their trusted-publishing workflow, then bump - no changelog step, no prompts, no token needed.
 - npm projects (a `package.json` with no `pyproject.toml` anywhere nearer) refuse a dirty tree, push one annotated version tag for their trusted-publishing workflow, then bump `package.json`. Maturin and Zig releases refuse a dirty tree the same way.
+
+For another project whose artifacts must be built and published by CI, select the same tag-driven flow explicitly:
+
+```toml
+[tool.fastship]
+release = "tag"
+```
+
+`ship-release` then pushes `v<version>`, increments the version, and leaves publication to the repository's workflow.
+
+If a native build duplicates the package version, list those synchronized copies:
+
+```toml
+[tool.fastship]
+release = "tag"
+version-files = ["bazel/versions.bzl"]
+```
+
+Each file must contain the old version exactly once; fastship validates every file before changing any of them.
 
 The final `Released` message is printed only after the full local publishing workflow succeeds. Tag-driven native releases print `Release started` because CI owns publication.
 

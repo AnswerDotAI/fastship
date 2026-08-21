@@ -2,7 +2,68 @@ import os, asyncio
 import builtins
 from types import SimpleNamespace
 
+import pytest
+
 import fastship.release as relmod
+
+
+def test_post_version_bumps():
+    assert relmod.bump_version("0.0.2026082005.post1") == "0.0.2026082005.post2"
+    assert relmod.bump_version("0.0.2026082005.post2", unbump=True) == "0.0.2026082005.post1"
+    assert relmod.bump_version("0.0.2026082005.post1", part=2) == "0.0.2026082006"
+
+
+def test_plain_python_tag_release(tmp_path, monkeypatch, capsys):
+    pyproject = '''[project]
+name = "xmojo"
+version = "0.0.2026082005.post1"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.fastship]
+branch = "main"
+release = "tag"
+version-files = ["bazel/versions.bzl"]
+'''
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+    package = tmp_path / "python/xmojo"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    versions = tmp_path / "bazel/versions.bzl"
+    versions.parent.mkdir()
+    versions.write_text('XMOJO_VERSION="0.0.2026082005.post1"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "_git_has_changes", lambda: False)
+    monkeypatch.setattr(relmod, "Release", lambda **kwargs: (_ for _ in ()).throw(AssertionError("local release used")))
+    calls = []
+    monkeypatch.setattr(relmod, "run", lambda command: calls.append(command) or "")
+
+    asyncio.run(relmod.ship_release())
+
+    assert calls == [
+        "git tag -a v0.0.2026082005.post1 -m v0.0.2026082005.post1",
+        "git push origin main",
+        "git push origin v0.0.2026082005.post1",
+        "git commit -am bump",
+        "git push"]
+    assert 'version = "0.0.2026082005.post2"' in (tmp_path / "pyproject.toml").read_text()
+    assert versions.read_text() == 'XMOJO_VERSION="0.0.2026082005.post2"\n'
+    assert (package / "__init__.py").read_text() == ""
+    assert "Release started: v0.0.2026082005.post1" in capsys.readouterr().out
+
+
+def test_version_files_are_validated_before_writing(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "demo"\nversion = "1.0.post1"\n', encoding="utf-8")
+    copy = tmp_path / "version.txt"
+    copy.write_text("1.0.post1 twice: 1.0.post1\n", encoding="utf-8")
+    cfg = SimpleNamespace(version="1.0.post1", pyproject=pyproject, init_file=None, version_files=[copy])
+
+    with pytest.raises(ValueError, match="exactly one"): relmod._write_config_version(cfg, "1.0.post2")
+
+    assert 'version = "1.0.post1"' in pyproject.read_text()
+    assert copy.read_text() == "1.0.post1 twice: 1.0.post1\n"
 
 
 def test_ship_release_gh_no_changelog_edits_and_skips_empty_commit(monkeypatch, tmp_path, capsys):

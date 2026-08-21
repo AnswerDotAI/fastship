@@ -51,7 +51,7 @@ def test_ship_bump_routes_to_cargo_when_cargo_toml_present(tmp_path, monkeypatch
     assert any("maturin develop" in c for c in calls)  # bump refreshes the local install
 
 
-def test_ship_bump_routes_to_init_when_no_cargo_toml(tmp_path, monkeypatch):
+def test_ship_bump_uses_static_project_version_when_present(tmp_path, monkeypatch):
     pyproj = '[project]\nname = "myproj"\nversion = "0.1.2"\n'
     (tmp_path / "pyproject.toml").write_text(pyproj, encoding="utf-8")
     pkg = tmp_path / "myproj"
@@ -62,7 +62,8 @@ def test_ship_bump_routes_to_init_when_no_cargo_toml(tmp_path, monkeypatch):
 
     relmod.ship_bump(part=1)
 
-    assert '__version__ = "0.2.0"' in (pkg / "__init__.py").read_text(encoding="utf-8")
+    assert 'version = "0.2.0"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    assert '__version__ = "0.1.2"' in (pkg / "__init__.py").read_text(encoding="utf-8")
 
 
 def test_ship_tag_release_needs_no_token_or_flags(tmp_path, monkeypatch):
