@@ -66,6 +66,13 @@ def _norm_mod(name: str) -> str:
     return re.sub(r"[^0-9a-zA-Z_]+", "_", name)
 
 
+def _pkg_bases(root:Path, data:dict)->list[Path]:
+    "Package roots declared by setuptools, followed by its conventional layouts."
+    package_dir = nested_idx(data, "tool", "setuptools", "package-dir", "")
+    bases = [root/package_dir] if package_dir else []
+    return list(dict.fromkeys([*bases, root/"src", root]))
+
+
 def _find_pkg(root: Path, data: dict) -> str:
     "Find the package directory from [project].name or explicit [tool.fastship].package."
     ship = nested_idx(data, "tool", "fastship") or {}
@@ -76,10 +83,10 @@ def _find_pkg(root: Path, data: dict) -> str:
     nm = proj.get("name")
     if nm:
         cand = _norm_mod(nm)
-        if (root / cand / _init).exists() or (root / "src" / cand / _init).exists(): return cand
+        if any((base/cand/_init).exists() for base in _pkg_bases(root, data)): return cand
 
     # fallback: scan for any package folder (handles non-standard layouts)
-    for base in (root / "src", root):
+    for base in _pkg_bases(root, data):
         if not base.exists(): continue
         cands = [p for p in base.iterdir() if p.is_dir() and (p / _init).exists() and not p.name.startswith(".")]
         if cands:
@@ -94,13 +101,13 @@ def _find_pkg(root: Path, data: dict) -> str:
         f'matches your package folder (e.g., "my-project" -> my_project/).')
 
 
-def _pkg_path(root: Path, pkg: str) -> Path:
+def _pkg_path(root: Path, pkg: str, data:dict) -> Path:
     "Find the directory containing `pkg/__init__.py` (supports `src/` layout)."
-    if (root / pkg / _init).exists(): return root / pkg
-    if (root / "src" / pkg / _init).exists(): return root / "src" / pkg
+    for base in _pkg_bases(root, data):
+        if (base/pkg/_init).exists(): return base/pkg
 
     # last-resort scan
-    for base in (root / "src", root):
+    for base in _pkg_bases(root, data):
         if not base.exists(): continue
         for p in base.rglob(_init):
             if p.parent.name == pkg: return p.parent
@@ -176,9 +183,12 @@ class ShipConfig:
     branch: str
     label_groups: dict
     wheel_only: bool
+    version_files: list[Path]
 
     @property
-    def version(self) -> str: return _read_version(self.init_file)
+    def version(self) -> str:
+        version = (_load_toml(self.pyproject).get("project") or {}).get("version")
+        return version or _read_version(self.init_file)
 
 
 @dataclass
@@ -202,17 +212,22 @@ def get_config(start: str | Path | None = None) -> ShipConfig:
     data = _load_toml(pyproj)
 
     pkg = _find_pkg(root, data)
-    pkg_path = _pkg_path(root, pkg)
+    pkg_path = _pkg_path(root, pkg, data)
     init_file = pkg_path / _init
 
     ship = nested_idx(data, "tool", "fastship") or {}
+    if ship.get("release") not in (None, "tag"): raise ValueError('[tool.fastship].release must be "tag" when set')
     changelog_file = root / ship.get("changelog_file", "CHANGELOG.md")
     branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
     label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
     wheel_only = ship.get("wheel-only", False)
+    version_files = ship.get("version-files") or []
+    if not isinstance(version_files, list) or not all(isinstance(o, str) for o in version_files):
+        raise ValueError("[tool.fastship].version-files must be a list of paths")
 
     return ShipConfig(root=root, pyproject=pyproj, data=data, pkg=pkg, pkg_path=pkg_path,
-        init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups, wheel_only=wheel_only)
+        init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups,
+        wheel_only=wheel_only, version_files=[root/o for o in version_files])
 
 
 def get_rs_config(start: str | Path | None = None) -> RustConfig:
@@ -290,7 +305,7 @@ def get_crate_config(start: str | Path | None = None) -> CrateConfig:
     return CrateConfig(root=manifest.parent, manifest_path=manifest, name=nested_idx(data, "package", "name") or "", branch=branch)
 
 
-def _cargo_bump(cfg, part:int = 2, unbump:bool = False):
+def _cargo_bump(cfg, part:int = None, unbump:bool = False):
     "Bump `[package].version` in Cargo.toml, printing old and new."
     print(f"Old version: {cfg.version}")
     new = bump_version(cfg.version, part=part, unbump=unbump)
@@ -353,14 +368,31 @@ def _write_version(init_file: Path, version: str):
     init_file.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def bump_version(version: str, part: int = 2, unbump: bool = False) -> str:
-    "Bump one part of a version (0=major, 1=minor, 2=patch) and reset later parts to 0."
-    if part not in (0, 1, 2): raise ValueError("part must be 0, 1, or 2")
+def _write_config_version(cfg:ShipConfig, version:str):
+    "Write the version back to the source used by this project."
+    old = cfg.version
+    copies = {}
+    for path in cfg.version_files:
+        text = path.read_text(encoding="utf-8")
+        if text.count(old) != 1: raise ValueError(f"Expected exactly one {old!r} in {path}")
+        copies[path] = text
+    if (_load_toml(cfg.pyproject).get("project") or {}).get("version") is not None:
+        _replace_toml_section_key(cfg.pyproject, "project", "version", version)
+    else: _write_version(cfg.init_file, version)
+    for path, text in copies.items(): path.write_text(text.replace(old, version), encoding="utf-8")
+
+
+def bump_version(version: str, part: int = None, unbump: bool = False) -> str:
+    "Bump `.postN` by default when present, otherwise one release part."
     v = Version(version)
+    amount = -1 if unbump else 1
+    if part is None and v.post is not None: return f"{'.'.join(map(str, v.release))}.post{max(0, v.post + amount)}"
+    if part is None: part = 2
+    if part not in (0, 1, 2): raise ValueError("part must be 0, 1, or 2")
     rel = list(v.release)
     while len(rel) < 3: rel.append(0)
     rel = rel[:3]
-    rel[part] = max(0, rel[part] + (-1 if unbump else 1))
+    rel[part] = max(0, rel[part] + amount)
     for i in range(part + 1, 3): rel[i] = 0
     return ".".join(map(str, rel))
 
@@ -651,7 +683,7 @@ def _nbdev_release():
 
 @call_parse
 def ship_bump(
-    part: int = 2,  # Part of version to bump (0=major, 1=minor, 2=patch)
+    part: int = None,  # Release part to bump; defaults to post when present, otherwise patch
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
     "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust (pure crates skip the reinstall); package.json for npm; else `__init__.py`."
@@ -667,7 +699,7 @@ def ship_bump(
     cfg = get_config()
     print(f"Old version: {cfg.version}")
     new = bump_version(cfg.version, part=part, unbump=unbump)
-    _write_version(cfg.init_file, new)
+    _write_config_version(cfg, new)
     print(f"New version: {new}")
 
 
@@ -771,7 +803,7 @@ def _push_release_tag(cfg, remote:str = "origin"):
     return tag
 
 
-def _npm_bump(part:int = 2, unbump:bool = False):
+def _npm_bump(part:int = None, unbump:bool = False):
     cfg = get_npm_config()
     print(f"Old version: {cfg.version}")
     new = bump_version(cfg.version, part=part, unbump=unbump)
@@ -821,6 +853,12 @@ async def ship_release(
     verbose: bool = False,  # Pass --verbose to twine upload
 ):
     "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm/crate projects."
+    ftype, proj = _find_project()
+    if ftype == "py":
+        data = _load_toml(proj)
+        if nested_idx(data, "tool", "fastship", "release") == "tag":
+            _ship_tag_release(_project_type(proj.parent, data))
+            return
     if _nbdev_release():
         await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
         ship_pypi(repository=repository, wheel_only=wheel_only, verbose=verbose)
@@ -828,7 +866,6 @@ async def ship_release(
         run("git commit -am bump")
         run("git push")
         return
-    ftype, proj = _find_project()
     if ftype == "npm":
         _ship_npm_release()
         return
