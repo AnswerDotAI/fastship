@@ -73,8 +73,8 @@ ship-pypi --quiet
 Build and upload a wheel without creating an sdist, either directly or as part of a plain Python release:
 
 ```bash
-ship-pypi --wheel_only
-ship-release --wheel_only
+ship-pypi --wheel-only
+ship-release --wheel-only
 ```
 
 For a permanently wheel-only project:
@@ -201,7 +201,7 @@ ship-gh
 If you've reviewed a changelog created by `ship-changelog`, release it without regenerating or reopening it:
 
 ```bash
-ship-gh --no_changelog --no_editor
+ship-gh --no-changelog --no-editor
 ```
 
 The confirmation prompt remains. Add `--yes` only when confirmation has already happened elsewhere.
@@ -256,7 +256,7 @@ To generate and review the changelog separately, then run the rest of the workfl
 ```bash
 ship-changelog
 # review CHANGELOG.md
-ship-release --no_changelog --no_editor --yes
+ship-release --no-changelog --no-editor --yes
 ```
 
 Changelog generation is idempotent: regenerating replaces the pending section for the current version rather than duplicating it. Regeneration also discards manual edits to that pending section, so do not regenerate after the final review.
