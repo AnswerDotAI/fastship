@@ -2,6 +2,22 @@
 
 <!-- do not remove -->
 
+## 0.1.3
+
+### New Features
+
+- Add tag-driven releases for Python platform wheels ([#34](https://github.com/AnswerDotAI/fastship/pull/34)), thanks to [@jph00](https://github.com/jph00)
+- Refactor Cargo version bumping into shared _cargo_bump helper; skip nbdev release flow for nbdev-docs-over-maturin projects ([#33](https://github.com/AnswerDotAI/fastship/issues/33))
+- Add pure-Rust crate support: ship-crate-new and Cargo.toml tag releases ([#31](https://github.com/AnswerDotAI/fastship/pull/31)), thanks to [@jph00](https://github.com/jph00)
+- verbose flag ([#30](https://github.com/AnswerDotAI/fastship/issues/30))
+
+### Bugs Squashed
+
+- ship_pr accepts a long single-line body ([#36](https://github.com/AnswerDotAI/fastship/pull/36)), thanks to [@jph00](https://github.com/jph00)
+- Update CLI flags for fastcore.script hyphenation ([#35](https://github.com/AnswerDotAI/fastship/pull/35)), thanks to [@jph00](https://github.com/jph00)
+- Correct first-release instructions in crate README template ([#32](https://github.com/AnswerDotAI/fastship/pull/32)), thanks to [@jph00](https://github.com/jph00)
+
+
 ## 0.1.2
 
 ### New Features
