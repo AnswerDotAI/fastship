@@ -1819,7 +1819,7 @@ async def ship_pr(
 
         gh = GhApi(owner, repo_name, token)
         if body == '-': pr_body = sys.stdin.read().strip()
-        else: pr_body = Path(body).read_text().strip() if body and '\n' not in body and Path(body).exists() else body
+        else: pr_body = Path(body).read_text().strip() if body and '\n' not in body and os.path.exists(body) else body
         pr = await gh.pulls.create(title=title, head=pr_branch, base=default, body=pr_body)
         print(f"Created PR #{pr.number}: {pr.html_url}")
 
