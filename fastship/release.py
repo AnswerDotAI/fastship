@@ -1136,7 +1136,21 @@ name = \"{pkg_name}\"
 crate-type = [\"cdylib\", \"rlib\"]
 
 [profile.release]
+lto = false
+codegen-units = 16
+
+[profile.release.package.{proj_name}]
+incremental = true
+
+[profile.dist]
+inherits = "release"
+lto = true
+incremental = false
+codegen-units = 1
 strip = true
+
+[profile.dist.package.{proj_name}]
+incremental = false
 
 [dependencies]
 pyo3 = \">=0.28\"
@@ -1220,6 +1234,10 @@ ship-rs-build
 
 The canonical version lives in `Cargo.toml`. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.
 
+## Build profiles
+
+uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. CI builds distributed wheels with `dist`, which enables full LTO and one codegen unit, disables incremental compilation, and strips the result.
+
 ## Release
 
 1. Run `maturin develop && pytest -q`.
@@ -1260,7 +1278,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
+          args: --profile dist --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
           manylinux: auto
       - uses: actions/upload-artifact@v7
         with:

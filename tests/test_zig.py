@@ -21,7 +21,12 @@ def test_new_projects_include_site_and_zig_scaffold(tmp_path):
         assert (root / "_config.yml").read_text() == relmod._read_asset("_config.yml")
         assert (root / "_layouts" / "default.html").read_text() == relmod._read_asset("_layouts/default.html")
     assert tomllib.loads((rust/"pyproject.toml").read_text())["tool"]["uv"]["cache-keys"][-1] == {"file": ".git/fastws-cargo-key"}
-    assert tomllib.loads((rust/"Cargo.toml").read_text())["profile"]["release"] == {"strip": True}
+    profiles = tomllib.loads((rust/"Cargo.toml").read_text())["profile"]
+    assert profiles["release"] == {"lto": False, "codegen-units": 16, "package": {"rust-proj": {"incremental": True}}}
+    assert profiles["dist"] == {
+        "inherits": "release", "lto": True, "incremental": False, "codegen-units": 1, "strip": True,
+        "package": {"rust-proj": {"incremental": False}}}
+    assert "args: --profile dist --out dist" in (rust/".github"/"workflows"/"ci.yml").read_text()
     assert (source/"_config.yml").read_text() == relmod._read_asset("_config.yml")
     assert (source/"_layouts"/"default.html").read_text() == relmod._read_asset("_layouts/default.html")
 

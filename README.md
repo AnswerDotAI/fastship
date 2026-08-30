@@ -130,7 +130,7 @@ ship-release             # changelog, tag, publish via CI, then bump
 
 Generated CI runs the tests, then builds wheels with `maturin-action` across an OS matrix (`manylinux: auto` on Linux) and publishes to GitHub Releases and PyPI on `v*` tags. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
 
-Generated projects use `.git/fastws-cargo-key` as their uv Cargo dependency cache key, avoiding rebuilds when Cargo rewrites a lockfile without changing its contents. Their release profile otherwise keeps Cargo's fast-compiling defaults and strips the shipped binary; it does not enable full LTO or force a single codegen unit.
+Generated projects use `.git/fastws-cargo-key` as their uv Cargo dependency cache key, avoiding rebuilds when Cargo rewrites a lockfile without changing its contents. Their release profile—used by uv builds and `maturin develop --release`—uses package-specific incremental compilation with no LTO and 16 codegen units for fast editable rebuilds while dependencies remain sccacheable. CI builds distributed wheels with the separate `dist` profile: full LTO, one codegen unit, no incremental compilation, and stripping.
 
 ### Zig-backed projects
 
