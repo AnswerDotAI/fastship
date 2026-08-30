@@ -20,6 +20,8 @@ def test_new_projects_include_site_and_zig_scaffold(tmp_path):
     for root in (plain, rust, zig):
         assert (root / "_config.yml").read_text() == relmod._read_asset("_config.yml")
         assert (root / "_layouts" / "default.html").read_text() == relmod._read_asset("_layouts/default.html")
+    assert tomllib.loads((rust/"pyproject.toml").read_text())["tool"]["uv"]["cache-keys"][-1] == {"file": ".git/fastws-cargo-key"}
+    assert tomllib.loads((rust/"Cargo.toml").read_text())["profile"]["release"] == {"strip": True}
     assert (source/"_config.yml").read_text() == relmod._read_asset("_config.yml")
     assert (source/"_layouts"/"default.html").read_text() == relmod._read_asset("_layouts/default.html")
 

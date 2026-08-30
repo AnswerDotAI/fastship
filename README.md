@@ -130,6 +130,8 @@ ship-release             # changelog, tag, publish via CI, then bump
 
 Generated CI runs the tests, then builds wheels with `maturin-action` across an OS matrix (`manylinux: auto` on Linux) and publishes to GitHub Releases and PyPI on `v*` tags. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
 
+Generated projects use `.git/fastws-cargo-key` as their uv Cargo dependency cache key, avoiding rebuilds when Cargo rewrites a lockfile without changing its contents. Their release profile otherwise keeps Cargo's fast-compiling defaults and strips the shipped binary; it does not enable full LTO or force a single codegen unit.
+
 ### Zig-backed projects
 
 Create Python CFFI bindings over a bundled Zig shared library:
