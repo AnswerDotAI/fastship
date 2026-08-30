@@ -1114,7 +1114,7 @@ python-source = \"python\"
 module-name = \"{pkg_name}._core\"
 
 [tool.uv]
-cache-keys = [{{ file = \"pyproject.toml\" }}, {{ file = \"src/**/*.rs\" }}, {{ file = \"Cargo.toml\" }}, {{ file = \"Cargo.lock\" }}]
+cache-keys = [{{ file = \"pyproject.toml\" }}, {{ file = \"src/**/*.rs\" }}, {{ file = \"Cargo.toml\" }}, {{ file = \".git/fastws-cargo-key\" }}]
 
 [tool.fastship]
 branch = \"main\"
@@ -1134,6 +1134,9 @@ description = \"{desc}\"
 [lib]
 name = \"{pkg_name}\"
 crate-type = [\"cdylib\", \"rlib\"]
+
+[profile.release]
+strip = true
 
 [dependencies]
 pyo3 = \">=0.28\"
