@@ -183,8 +183,7 @@ Generate or update `CHANGELOG.md` from closed GitHub issues since your last rele
 ship-changelog
 ```
 
-This is useful when you want to edit the changelog separately (e.g., in an editor or Claude Code) before releasing.
-If you already have a `CHANGELOG.md`, it must include `<!-- do not remove -->` near the top so fastship knows where to insert the next release notes.
+This is useful when you want to edit the changelog separately (e.g., in an editor or Claude Code) before releasing. If you already have a `CHANGELOG.md`, it must include `<!-- do not remove -->` near the top so fastship knows where to insert the next release notes.
 
 ### `ship-gh`
 
