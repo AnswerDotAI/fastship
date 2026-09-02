@@ -1802,9 +1802,10 @@ async def ship_pr(
     body: str = "",         # PR body text, path to a file containing it, or '-' to read from stdin
     token: str = None,      # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
     repo: str = None,       # Override repo ("OWNER/REPO")
+    path: str = ".",        # Repo directory; the default is the current directory
 ):
     "Create a PR from uncommitted/unpushed work, merge it, and clean up."
-    g = Git(".", raise_exc=True)
+    g = Git(path, raise_exc=True)
     if not g.exists: raise SystemExit("Not a git repository")
 
     try: default = g.remote('show', 'origin').split("HEAD branch:")[1].split()[0]
@@ -1832,10 +1833,10 @@ async def ship_pr(
         if has_changes: g.commit('-am', title)
         g.push('-u', 'origin', pr_branch)
 
-        owner, repo_name = _parse_repo(repo)
+        owner, repo_name = repo.split('/', 1) if repo and '/' in repo else repo_details(g.config('--get', 'remote.origin.url').strip())
         if not owner or not repo_name: raise SystemExit("Could not determine GitHub repo. Use --repo OWNER/REPO")
 
-        token = token or _get_token()
+        token = token or _get_token(Path(path))
         if not token: raise SystemExit("No GitHub token found")
 
         gh = GhApi(owner, repo_name, token)
