@@ -2,6 +2,19 @@
 
 <!-- do not remove -->
 
+## 0.1.4
+
+### New Features
+
+- ship_pr takes a path ([#39](https://github.com/AnswerDotAI/fastship/pull/39)), thanks to [@jph00](https://github.com/jph00)
+- Generate separate local and distribution Rust profiles ([#38](https://github.com/AnswerDotAI/fastship/pull/38)), thanks to [@jph00](https://github.com/jph00)
+- Generate efficient Rust build cache configuration ([#37](https://github.com/AnswerDotAI/fastship/pull/37)), thanks to [@jph00](https://github.com/jph00)
+
+### Bugs Squashed
+
+- Raise `CliError` instead of `SystemExit` from release steps ([#40](https://github.com/AnswerDotAI/fastship/pull/40)), thanks to [@jph00](https://github.com/jph00)
+
+
 ## 0.1.3
 
 ### New Features
