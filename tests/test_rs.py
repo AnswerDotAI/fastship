@@ -90,5 +90,5 @@ def test_ship_tag_release_refuses_dirty_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(relmod, "_git_has_changes", lambda: True)
 
     import pytest
-    with pytest.raises(SystemExit, match="Uncommitted changes"):
+    with pytest.raises(relmod.CliError, match="Uncommitted changes"):
         relmod._ship_tag_release("rust")

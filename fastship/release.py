@@ -567,9 +567,9 @@ def _ensure_py_runtime_version(root:Path, data:dict):
 def _init_rs_config(root:Path, branch:str = None, force:bool = False):
     pyproj = _find_pyproject(root)
     data = _load_toml(pyproj)
-    if not _is_maturin_project(data): raise SystemExit(f"{pyproj} does not look like a maturin project")
+    if not _is_maturin_project(data): raise CliError(f"{pyproj} does not look like a maturin project")
     manifest = pyproj.parent / "Cargo.toml"
-    if not manifest.exists(): raise SystemExit(f"Missing {manifest}")
+    if not manifest.exists(): raise CliError(f"Missing {manifest}")
     _ensure_project_dynamic_version(pyproj)
     _ensure_toml_section(pyproj, "project.optional-dependencies", dict(dev=["fastship>=0.0.11", "maturin>=1.0,<2.0", "pytest"]))
     _ensure_rs_runtime_version(root, data)
@@ -633,8 +633,7 @@ class Release:
             lr, self.commit_date = None, "2000-01-01T00:00:00Z"
 
         if lr and (Version(self.cfg.version) <= Version(lr.tag_name)):
-            print(f"Error: Version bump required: expected: >{lr.tag_name}, got: {self.cfg.version}.")
-            raise SystemExit(1)
+            raise CliError(f"Version bump required: expected: >{lr.tag_name}, got: {self.cfg.version}.")
 
         res = f"\n## {self.cfg.version}\n\n"
         issues = await parallel_async(self._issues, self.groups.keys())
@@ -757,9 +756,9 @@ async def ship_pages(
 ):
     "Enable GitHub Pages from main:/ and use its URL as the repository homepage."
     owner, repo = _git_owner_repo()
-    if not owner or not repo: raise SystemExit("Could not infer GitHub owner/repo from origin")
+    if not owner or not repo: raise CliError("Could not infer GitHub owner/repo from origin")
     token = token or _get_token()
-    if not token: raise SystemExit("No GitHub token found")
+    if not token: raise CliError("No GitHub token found")
     gh = GhApi(owner, repo, token)
     pages = await gh.repos.create_pages_site(build_type="legacy", source={"branch":"main", "path":"/"})
     await gh.repos.update(homepage=pages.html_url)
@@ -816,7 +815,7 @@ def _ship_npm_release(remote:str = "origin"):
     "Tag `v<version>` and push branch + tag (CI publishes to npm and creates the GitHub release), then bump."
     cfg = get_npm_config()
     os.chdir(cfg.root)
-    if _git_has_changes(): raise SystemExit("Uncommitted changes: commit or stash before releasing")
+    if _git_has_changes(): raise CliError("Uncommitted changes: commit or stash before releasing")
     version = cfg.version
     tag = _push_release_tag(cfg)
     _npm_bump()
@@ -831,7 +830,7 @@ def _ship_tag_release(kind:str):
     "Tag `v<version>` and push branch + tag (CI builds, publishes, and writes release notes), then bump."
     cfg = get_crate_config() if kind == "crate" else get_rs_config() if kind == "rust" else get_config()
     os.chdir(cfg.root)
-    if _git_has_changes(): raise SystemExit("Uncommitted changes: commit or stash before releasing")
+    if _git_has_changes(): raise CliError("Uncommitted changes: commit or stash before releasing")
     version = cfg.version
     tag = _push_release_tag(cfg)
     ship_bump()
@@ -922,7 +921,7 @@ def ship_zig_build(
 ):
     "Build and check the current platform wheel for a fastship Zig project."
     cfg = get_config()
-    if _project_type(cfg.root, cfg.data) != "zig": raise SystemExit("Not a fastship Zig project")
+    if _project_type(cfg.root, cfg.data) != "zig": raise CliError("Not a fastship Zig project")
     _build_dist(cfg, wheel_only=True, quiet=quiet)
 
 
@@ -1806,23 +1805,23 @@ async def ship_pr(
 ):
     "Create a PR from uncommitted/unpushed work, merge it, and clean up."
     g = Git(path, raise_exc=True)
-    if not g.exists: raise SystemExit("Not a git repository")
+    if not g.exists: raise CliError("Not a git repository")
 
     try: default = g.remote('show', 'origin').split("HEAD branch:")[1].split()[0]
     except Exception: default = "main"
 
     current = g.branch(show_current=True).strip()
-    if current != default: raise SystemExit(f"Must be on {default} branch (currently on {current})")
+    if current != default: raise CliError(f"Must be on {default} branch (currently on {current})")
 
     g.fetch('origin')
     try: behind = bool(g.log(f'HEAD..origin/{default}', oneline=True).strip())
     except Exception: behind = False
-    if behind: raise SystemExit(f"Local {default} is behind origin. Run: git pull")
+    if behind: raise CliError(f"Local {default} is behind origin. Run: git pull")
 
     try: has_commits = bool(g.log(f'origin/{default}..HEAD', oneline=True).strip())
     except Exception: has_commits = False
     has_changes = bool(g.status(porcelain=True))
-    if not has_commits and not has_changes: raise SystemExit("Nothing to PR: no unpushed commits and no uncommitted changes")
+    if not has_commits and not has_changes: raise CliError("Nothing to PR: no unpushed commits and no uncommitted changes")
 
     slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')[:50]
     if len(slug) == 50: slug = slug.rsplit('-', 1)[0]
@@ -1834,10 +1833,10 @@ async def ship_pr(
         g.push('-u', 'origin', pr_branch)
 
         owner, repo_name = repo.split('/', 1) if repo and '/' in repo else repo_details(g.config('--get', 'remote.origin.url').strip())
-        if not owner or not repo_name: raise SystemExit("Could not determine GitHub repo. Use --repo OWNER/REPO")
+        if not owner or not repo_name: raise CliError("Could not determine GitHub repo. Use --repo OWNER/REPO")
 
         token = token or _get_token(Path(path))
-        if not token: raise SystemExit("No GitHub token found")
+        if not token: raise CliError("No GitHub token found")
 
         gh = GhApi(owner, repo_name, token)
         if body == '-': pr_body = sys.stdin.read().strip()

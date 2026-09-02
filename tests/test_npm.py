@@ -53,7 +53,7 @@ def test_ship_npm_release_refuses_dirty_tree(tmp_path, monkeypatch):
     monkeypatch.setenv("FASTSHIP_BRANCH", "main")
     monkeypatch.setattr(relmod, "_git_has_changes", lambda: True)
 
-    with pytest.raises(SystemExit, match="Uncommitted changes"):
+    with pytest.raises(relmod.CliError, match="Uncommitted changes"):
         relmod._ship_npm_release()
 
 
