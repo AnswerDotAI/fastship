@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import fastship.release as relmod
+import pytest, fastship.release as relmod
 
 
 def _make_rs_project(root: Path, configured: bool = True, dynamic: bool = True):
@@ -66,12 +66,16 @@ def test_ship_bump_uses_static_project_version_when_present(tmp_path, monkeypatc
     assert '__version__ = "0.1.2"' in (pkg / "__init__.py").read_text(encoding="utf-8")
 
 
+def _add_version_file(root: Path, text: str):
+    pyproj = root / "pyproject.toml"
+    pyproj.write_text(pyproj.read_text(encoding="utf-8") + 'version-files = ["wasm/package.json"]\n', encoding="utf-8")
+    (root / "wasm").mkdir()
+    (root / "wasm" / "package.json").write_text(text, encoding="utf-8")
+
+
 def test_rs_version_files_bump_with_cargo(tmp_path, monkeypatch):
     _make_rs_project(tmp_path)
-    (tmp_path / "pyproject.toml").write_text(
-        (tmp_path / "pyproject.toml").read_text(encoding="utf-8") + 'version-files = ["wasm/package.json"]\n', encoding="utf-8")
-    (tmp_path / "wasm").mkdir()
-    (tmp_path / "wasm" / "package.json").write_text('{\n  "name": "@acme/exhash",\n  "version": "0.1.2"\n}\n', encoding="utf-8")
+    _add_version_file(tmp_path, '{\n  "name": "@acme/exhash",\n  "version": "0.1.2"\n}\n')
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: None)
 
@@ -83,35 +87,37 @@ def test_rs_version_files_bump_with_cargo(tmp_path, monkeypatch):
 
 def test_rs_version_files_refuse_stale_copy(tmp_path, monkeypatch):
     _make_rs_project(tmp_path)
-    (tmp_path / "pyproject.toml").write_text(
-        (tmp_path / "pyproject.toml").read_text(encoding="utf-8") + 'version-files = ["wasm/package.json"]\n', encoding="utf-8")
-    (tmp_path / "wasm").mkdir()
-    (tmp_path / "wasm" / "package.json").write_text('{"version": "0.0.9"}\n', encoding="utf-8")
+    _add_version_file(tmp_path, '{"version": "0.0.9"}\n')
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: None)
 
-    import pytest
-    with pytest.raises(ValueError, match="exactly one"):
-        relmod.ship_bump(part=2)
+    with pytest.raises(ValueError, match="exactly one"): relmod.ship_bump(part=2)
     assert 'version = "0.1.2"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")  # nothing written
 
 
-_ws_cargo = """[workspace]
-members = ["py"]
+def test_single_crate_missing_version_names_package(tmp_path):
+    _make_rs_project(tmp_path)
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "exhash"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match=r"\[package\]\.version"): relmod.get_rs_config(tmp_path).version
 
-[workspace.package]
-version = "0.1.2"
 
-[package]
+_ws_package = """[package]
 name = "exhash"
 version.workspace = true
 edition = "2024"
 """
+_ws_root = """[workspace]
+members = ["py"]
+
+[workspace.package]
+version = "0.1.2"
+"""
 
 
-def test_workspace_version_read_and_bump(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cargo", [_ws_root + "\n" + _ws_package, _ws_package + "\n" + _ws_root])
+def test_workspace_version_read_and_bump(tmp_path, monkeypatch, cargo):
     _make_rs_project(tmp_path)
-    (tmp_path / "Cargo.toml").write_text(_ws_cargo, encoding="utf-8")
+    (tmp_path / "Cargo.toml").write_text(cargo, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: None)
 

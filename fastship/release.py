@@ -313,8 +313,9 @@ def get_crate_config(start: str | Path | None = None) -> CrateConfig:
 
 def _cargo_bump(cfg, part:int = None, unbump:bool = False):
     "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited), printing old and new."
-    print(f"Old version: {cfg.version}")
-    old, new = cfg.version, bump_version(cfg.version, part=part, unbump=unbump)
+    old = cfg.version
+    print(f"Old version: {old}")
+    new = bump_version(old, part=part, unbump=unbump)
     copies = _read_copies(cfg.version_files, old)
     _replace_toml_section_key(cfg.manifest_path, _cargo_version_section(cfg.manifest_path), "version", new)
     _write_copies(copies, old, new)
@@ -397,6 +398,7 @@ def _read_copies(paths:list[Path], old:str) -> dict[Path,str]:
 
 
 def _write_copies(copies:dict[Path,str], old:str, new:str):
+    "Rewrite each copy read by `_read_copies` with `old` replaced by `new`."
     for path, text in copies.items(): path.write_text(text.replace(old, new), encoding="utf-8")
 
 
@@ -454,8 +456,10 @@ def _is_maturin_project(data:dict) -> bool:
 
 def _cargo_version_section(manifest:Path) -> str:
     "The Cargo.toml section holding the version: `package`, or `workspace.package` when the package inherits it."
-    ver = (_load_toml(manifest).get("package") or {}).get("version")
-    return "package" if isinstance(ver, str) else "workspace.package"
+    data = _load_toml(manifest)
+    ver = (data.get("package") or {}).get("version")
+    inherited = isinstance(ver, dict) or "package" in (data.get("workspace") or {})
+    return "workspace.package" if inherited else "package"
 
 
 def _cargo_version(manifest:Path) -> str:
@@ -952,7 +956,7 @@ def ship_zig_build(
 
 
 def ship_rs_bump(part: int = 2, unbump: bool = False):
-    "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
+    "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited), then refresh the local editable install."
     cfg = get_rs_config()
     _cargo_bump(cfg, part=part, unbump=unbump)
     os.chdir(cfg.root)
