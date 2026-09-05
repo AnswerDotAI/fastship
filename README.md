@@ -116,6 +116,8 @@ name = "my_project"
 dynamic = ["version"]
 ```
 
+A Cargo workspace whose crates inherit `version.workspace = true` is read and bumped through `[workspace.package]`, and `[tool.fastship].version-files` lists synchronized copies of the version (an npm `package.json` beside a wasm crate, say) that `ship-bump` rewrites with the same exactly-once check as Python projects.
+
 Commands:
 
 ```bash

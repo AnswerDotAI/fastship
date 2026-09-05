@@ -312,11 +312,11 @@ def get_crate_config(start: str | Path | None = None) -> CrateConfig:
 
 
 def _cargo_bump(cfg, part:int = None, unbump:bool = False):
-    "Bump `[package].version` in Cargo.toml, printing old and new."
+    "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited), printing old and new."
     print(f"Old version: {cfg.version}")
     old, new = cfg.version, bump_version(cfg.version, part=part, unbump=unbump)
     copies = _read_copies(cfg.version_files, old)
-    _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
+    _replace_toml_section_key(cfg.manifest_path, _cargo_version_section(cfg.manifest_path), "version", new)
     _write_copies(copies, old, new)
     print(f"New version: {new}")
     return new
@@ -452,10 +452,17 @@ def _is_maturin_project(data:dict) -> bool:
     return "maturin" in build_backend or bool(nested_idx(data, "tool", "maturin"))
 
 
-def _cargo_version(manifest:Path) -> str:
-    "Read `[package].version` from Cargo.toml."
+def _cargo_version_section(manifest:Path) -> str:
+    "The Cargo.toml section holding the version: `package`, or `workspace.package` when the package inherits it."
     ver = (_load_toml(manifest).get("package") or {}).get("version")
-    if not ver: raise ValueError(f"Could not find [package].version in {manifest}")
+    return "package" if isinstance(ver, str) else "workspace.package"
+
+
+def _cargo_version(manifest:Path) -> str:
+    "Read the version from Cargo.toml, following `version.workspace = true` to `[workspace.package]`."
+    sec = _cargo_version_section(manifest)
+    ver = nested_idx(_load_toml(manifest), *sec.split("."), "version")
+    if not isinstance(ver, str) or not ver: raise ValueError(f"Could not find [{sec}].version in {manifest}")
     return ver
 
 

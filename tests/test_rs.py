@@ -96,6 +96,33 @@ def test_rs_version_files_refuse_stale_copy(tmp_path, monkeypatch):
     assert 'version = "0.1.2"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")  # nothing written
 
 
+_ws_cargo = """[workspace]
+members = ["py"]
+
+[workspace.package]
+version = "0.1.2"
+
+[package]
+name = "exhash"
+version.workspace = true
+edition = "2024"
+"""
+
+
+def test_workspace_version_read_and_bump(tmp_path, monkeypatch):
+    _make_rs_project(tmp_path)
+    (tmp_path / "Cargo.toml").write_text(_ws_cargo, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: None)
+
+    assert relmod.get_rs_config(tmp_path).version == "0.1.2"
+    relmod.ship_bump(part=2)
+
+    cargo = (tmp_path / "Cargo.toml").read_text(encoding="utf-8")
+    assert '[workspace.package]\nversion = "0.1.3"' in cargo
+    assert "version.workspace = true" in cargo  # [package] untouched
+
+
 def test_ship_tag_release_needs_no_token_or_flags(tmp_path, monkeypatch):
     # The rust flow is pure tag-push: no changelog machinery, no GitHub client, no prompts.
     _make_rs_project(tmp_path)
