@@ -66,6 +66,36 @@ def test_ship_bump_uses_static_project_version_when_present(tmp_path, monkeypatc
     assert '__version__ = "0.1.2"' in (pkg / "__init__.py").read_text(encoding="utf-8")
 
 
+def test_rs_version_files_bump_with_cargo(tmp_path, monkeypatch):
+    _make_rs_project(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        (tmp_path / "pyproject.toml").read_text(encoding="utf-8") + 'version-files = ["wasm/package.json"]\n', encoding="utf-8")
+    (tmp_path / "wasm").mkdir()
+    (tmp_path / "wasm" / "package.json").write_text('{\n  "name": "@acme/exhash",\n  "version": "0.1.2"\n}\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: None)
+
+    relmod.ship_bump(part=2)
+
+    assert 'version = "0.1.3"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")
+    assert '"version": "0.1.3"' in (tmp_path / "wasm" / "package.json").read_text(encoding="utf-8")
+
+
+def test_rs_version_files_refuse_stale_copy(tmp_path, monkeypatch):
+    _make_rs_project(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        (tmp_path / "pyproject.toml").read_text(encoding="utf-8") + 'version-files = ["wasm/package.json"]\n', encoding="utf-8")
+    (tmp_path / "wasm").mkdir()
+    (tmp_path / "wasm" / "package.json").write_text('{"version": "0.0.9"}\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: None)
+
+    import pytest
+    with pytest.raises(ValueError, match="exactly one"):
+        relmod.ship_bump(part=2)
+    assert 'version = "0.1.2"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")  # nothing written
+
+
 def test_ship_tag_release_needs_no_token_or_flags(tmp_path, monkeypatch):
     # The rust flow is pure tag-push: no changelog machinery, no GitHub client, no prompts.
     _make_rs_project(tmp_path)
