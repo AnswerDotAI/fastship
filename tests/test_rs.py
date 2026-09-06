@@ -114,6 +114,18 @@ version = "0.1.2"
 """
 
 
+@pytest.mark.parametrize("version", ["0.1.2", "9.8.7"])
+def test_workspace_rejects_independent_package_version(tmp_path, version):
+    _make_rs_project(tmp_path)
+    manifest = tmp_path / "Cargo.toml"
+    cargo = _ws_root + _ws_package.replace("version.workspace = true", f'version = "{version}"')
+    manifest.write_text(cargo, encoding="utf-8")
+    cfg = relmod.get_rs_config(tmp_path)
+
+    with pytest.raises(ValueError, match=r"version\.workspace = true"): relmod._cargo_bump(cfg, part=2)
+    assert manifest.read_text(encoding="utf-8") == cargo
+
+
 @pytest.mark.parametrize("cargo", [_ws_root + "\n" + _ws_package, _ws_package + "\n" + _ws_root])
 def test_workspace_version_read_and_bump(tmp_path, monkeypatch, cargo):
     _make_rs_project(tmp_path)

@@ -455,11 +455,15 @@ def _is_maturin_project(data:dict) -> bool:
 
 
 def _cargo_version_section(manifest:Path) -> str:
-    "The Cargo.toml section holding the version: `package`, or `workspace.package` when the package inherits it."
+    "The version section in Cargo.toml; workspace root packages must inherit the shared version."
     data = _load_toml(manifest)
     ver = (data.get("package") or {}).get("version")
-    inherited = isinstance(ver, dict) or "package" in (data.get("workspace") or {})
-    return "workspace.package" if inherited else "package"
+    inherited = isinstance(ver, dict) and ver.get("workspace") is True
+    workspace = "workspace" in data
+    if workspace and "package" in data and not inherited:
+        raise ValueError(f"Fastship requires shared versioning in Cargo workspaces: {manifest}. "
+            "Set version.workspace = true in [package] and define the version in [workspace.package].")
+    return "workspace.package" if workspace or inherited else "package"
 
 
 def _cargo_version(manifest:Path) -> str:
