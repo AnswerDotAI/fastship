@@ -222,9 +222,8 @@ def get_config(start: str | Path | None = None) -> ShipConfig:
     branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
     label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
     wheel_only = ship.get("wheel-only", False)
-    return ShipConfig(root=root, pyproject=pyproj, data=data, pkg=pkg, pkg_path=pkg_path,
-        init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups,
-        wheel_only=wheel_only, version_files=_version_files(root, ship))
+    return ShipConfig(root=root, pyproject=pyproj, data=data, pkg=pkg, pkg_path=pkg_path, init_file=init_file, changelog_file=changelog_file,
+        branch=branch, label_groups=label_groups, wheel_only=wheel_only, version_files=_version_files(root, ship))
 
 
 def get_rs_config(start: str | Path | None = None) -> RustConfig:
@@ -455,15 +454,12 @@ def _is_maturin_project(data:dict) -> bool:
 
 
 def _cargo_version_section(manifest:Path) -> str:
-    "The version section in Cargo.toml; workspace root packages must inherit the shared version."
+    "The version section in Cargo.toml: package, inherited workspace, or virtual workspace."
     data = _load_toml(manifest)
     ver = (data.get("package") or {}).get("version")
     inherited = isinstance(ver, dict) and ver.get("workspace") is True
-    workspace = "workspace" in data
-    if workspace and "package" in data and not inherited:
-        raise ValueError(f"Fastship requires shared versioning in Cargo workspaces: {manifest}. "
-            "Set version.workspace = true in [package] and define the version in [workspace.package].")
-    return "workspace.package" if workspace or inherited else "package"
+    virtual = "workspace" in data and "package" not in data
+    return "workspace.package" if inherited or virtual else "package"
 
 
 def _cargo_version(manifest:Path) -> str:
