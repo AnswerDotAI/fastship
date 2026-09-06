@@ -116,7 +116,7 @@ name = "my_project"
 dynamic = ["version"]
 ```
 
-A Cargo workspace whose crates inherit `version.workspace = true` is read and bumped through `[workspace.package]`. `[tool.fastship].version-files` lists synchronized copies of the version, such as an npm `package.json` beside a wasm crate, and `ship-bump` rewrites them with the same exactly-once check as Python projects.
+A Cargo workspace root with `version.workspace = true`, or a virtual workspace without a root package, is read and bumped through `[workspace.package]`. A root package with a literal version uses `[package].version`, leaving any shared workspace version unchanged. `[tool.fastship].version-files` lists synchronized copies of the version, such as an npm `package.json` beside a wasm crate, and `ship-bump` rewrites them with the same exactly-once check as Python projects.
 
 Commands:
 
