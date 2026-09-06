@@ -11,7 +11,7 @@ __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "NpmCo
     "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_zig_new", "ship_zig_build"]
 
 import os, re, sys, json, shutil, subprocess, ast, importlib.resources, shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 try: import tomllib
 except ImportError: import tomli as tomllib  # pragma: no cover
@@ -200,6 +200,7 @@ class RustConfig:
     branch: str
     changelog_file: Path
     label_groups: dict
+    version_files: list[Path]
 
     @property
     def version(self) -> str: return _cargo_version(self.manifest_path)
@@ -221,13 +222,9 @@ def get_config(start: str | Path | None = None) -> ShipConfig:
     branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
     label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
     wheel_only = ship.get("wheel-only", False)
-    version_files = ship.get("version-files") or []
-    if not isinstance(version_files, list) or not all(isinstance(o, str) for o in version_files):
-        raise ValueError("[tool.fastship].version-files must be a list of paths")
-
     return ShipConfig(root=root, pyproject=pyproj, data=data, pkg=pkg, pkg_path=pkg_path,
         init_file=init_file, changelog_file=changelog_file, branch=branch, label_groups=label_groups,
-        wheel_only=wheel_only, version_files=[root/o for o in version_files])
+        wheel_only=wheel_only, version_files=_version_files(root, ship))
 
 
 def get_rs_config(start: str | Path | None = None) -> RustConfig:
@@ -246,7 +243,15 @@ def get_rs_config(start: str | Path | None = None) -> RustConfig:
     changelog_file = root / ship.get("changelog_file", "CHANGELOG.md")
     label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
     return RustConfig(root=root, pyproject=pyproj, data=data, manifest_path=manifest_path, branch=branch,
-        changelog_file=changelog_file, label_groups=label_groups)
+        changelog_file=changelog_file, label_groups=label_groups, version_files=_version_files(root, ship))
+
+
+def _version_files(root:Path, ship:dict) -> list[Path]:
+    "Synchronized version copies from `[tool.fastship].version-files`, resolved against `root`."
+    files = ship.get("version-files") or []
+    if not isinstance(files, list) or not all(isinstance(o, str) for o in files):
+        raise ValueError("[tool.fastship].version-files must be a list of paths")
+    return [root/o for o in files]
 
 
 def _project_type(root:Path, data:dict)->str:
@@ -292,6 +297,7 @@ class CrateConfig:
     manifest_path: Path
     name: str
     branch: str
+    version_files: list[Path] = field(default_factory=list)
 
     @property
     def version(self) -> str: return _cargo_version(self.manifest_path)
@@ -306,10 +312,13 @@ def get_crate_config(start: str | Path | None = None) -> CrateConfig:
 
 
 def _cargo_bump(cfg, part:int = None, unbump:bool = False):
-    "Bump `[package].version` in Cargo.toml, printing old and new."
-    print(f"Old version: {cfg.version}")
-    new = bump_version(cfg.version, part=part, unbump=unbump)
-    _replace_toml_section_key(cfg.manifest_path, "package", "version", new)
+    "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited), printing old and new."
+    old = cfg.version
+    print(f"Old version: {old}")
+    new = bump_version(old, part=part, unbump=unbump)
+    copies = _read_copies(cfg.version_files, old)
+    _replace_toml_section_key(cfg.manifest_path, _cargo_version_section(cfg.manifest_path), "version", new)
+    _write_copies(copies, old, new)
     print(f"New version: {new}")
     return new
 
@@ -371,15 +380,26 @@ def _write_version(init_file: Path, version: str):
 def _write_config_version(cfg:ShipConfig, version:str):
     "Write the version back to the source used by this project."
     old = cfg.version
-    copies = {}
-    for path in cfg.version_files:
-        text = path.read_text(encoding="utf-8")
-        if text.count(old) != 1: raise ValueError(f"Expected exactly one {old!r} in {path}")
-        copies[path] = text
+    copies = _read_copies(cfg.version_files, old)
     if (_load_toml(cfg.pyproject).get("project") or {}).get("version") is not None:
         _replace_toml_section_key(cfg.pyproject, "project", "version", version)
     else: _write_version(cfg.init_file, version)
-    for path, text in copies.items(): path.write_text(text.replace(old, version), encoding="utf-8")
+    _write_copies(copies, old, version)
+
+
+def _read_copies(paths:list[Path], old:str) -> dict[Path,str]:
+    "Contents of each version copy, checked to hold `old` exactly once before anything is written."
+    copies = {}
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        if text.count(old) != 1: raise ValueError(f"Expected exactly one {old!r} in {path}")
+        copies[path] = text
+    return copies
+
+
+def _write_copies(copies:dict[Path,str], old:str, new:str):
+    "Rewrite each copy read by `_read_copies` with `old` replaced by `new`."
+    for path, text in copies.items(): path.write_text(text.replace(old, new), encoding="utf-8")
 
 
 def bump_version(version: str, part: int = None, unbump: bool = False) -> str:
@@ -434,10 +454,23 @@ def _is_maturin_project(data:dict) -> bool:
     return "maturin" in build_backend or bool(nested_idx(data, "tool", "maturin"))
 
 
+def _cargo_version_section(manifest:Path) -> str:
+    "The version section in Cargo.toml; workspace root packages must inherit the shared version."
+    data = _load_toml(manifest)
+    ver = (data.get("package") or {}).get("version")
+    inherited = isinstance(ver, dict) and ver.get("workspace") is True
+    workspace = "workspace" in data
+    if workspace and "package" in data and not inherited:
+        raise ValueError(f"Fastship requires shared versioning in Cargo workspaces: {manifest}. "
+            "Set version.workspace = true in [package] and define the version in [workspace.package].")
+    return "workspace.package" if workspace or inherited else "package"
+
+
 def _cargo_version(manifest:Path) -> str:
-    "Read `[package].version` from Cargo.toml."
-    ver = (_load_toml(manifest).get("package") or {}).get("version")
-    if not ver: raise ValueError(f"Could not find [package].version in {manifest}")
+    "Read the version from Cargo.toml, following `version.workspace = true` to `[workspace.package]`."
+    sec = _cargo_version_section(manifest)
+    ver = nested_idx(_load_toml(manifest), *sec.split("."), "version")
+    if not isinstance(ver, str) or not ver: raise ValueError(f"Could not find [{sec}].version in {manifest}")
     return ver
 
 
@@ -927,7 +960,7 @@ def ship_zig_build(
 
 
 def ship_rs_bump(part: int = 2, unbump: bool = False):
-    "Bump `[package].version` in Cargo.toml, then refresh the local editable install."
+    "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited), then refresh the local editable install."
     cfg = get_rs_config()
     _cargo_bump(cfg, part=part, unbump=unbump)
     os.chdir(cfg.root)
