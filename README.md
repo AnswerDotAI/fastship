@@ -230,6 +230,7 @@ ship-release        # generate changelog, release, bump version, push
 `ship-release` selects the project type automatically:
 
 - Plain Python projects build and check the distribution before creating the GitHub release, upload it to PyPI, then bump.
+- A project with a static `[project].version` and no package to build is released on GitHub only. There is no build, PyPI upload or changelog. GitHub writes the release notes, and the bump updates `pyproject.toml`. A uv workspace root is refused, since it is not a project.
 - Maturin and fastship Zig projects push one annotated version tag for their trusted-publishing workflow, then bump - no changelog step, no prompts, no token needed.
 - npm projects (a `package.json` with no `pyproject.toml` anywhere nearer) refuse a dirty tree, push one annotated version tag for their trusted-publishing workflow, then bump `package.json`. Maturin and Zig releases refuse a dirty tree the same way.
 

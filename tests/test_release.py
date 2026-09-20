@@ -75,7 +75,7 @@ def test_ship_release_gh_no_changelog_edits_and_skips_empty_commit(monkeypatch, 
     class FakeRelease:
         def __init__(self, **kwargs):
             self.changefile = changefile
-            self.cfg = SimpleNamespace(version="0.1.0")
+            self.cfg = SimpleNamespace(version="0.1.0", gh_only=False)
 
         async def changelog(self):
             state.changelog_called = True
@@ -110,7 +110,7 @@ def test_ship_release_gh_can_skip_editor_and_prompt(monkeypatch, tmp_path):
     class FakeRelease:
         def __init__(self, **kwargs):
             self.changefile = changefile
-            self.cfg = SimpleNamespace(version="0.1.0")
+            self.cfg = SimpleNamespace(version="0.1.0", gh_only=False)
 
         async def release(self):
             state.release_called = True
@@ -135,7 +135,7 @@ def test_ship_release_builds_before_publishing(monkeypatch):
     class FakeRelease:
         def __init__(self, **kwargs):
             self.changefile = "CHANGELOG.md"
-            self.cfg = SimpleNamespace(version="0.1.0", root=".", wheel_only=False)
+            self.cfg = SimpleNamespace(version="0.1.0", gh_only=False, root=".", wheel_only=False)
 
         async def release(self):
             calls.append(("gh", {}))

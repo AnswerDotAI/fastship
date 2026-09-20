@@ -115,6 +115,13 @@ def _pkg_path(root: Path, pkg: str, data:dict) -> Path:
     raise FileNotFoundError(f"Could not find {pkg}/__init__.py under {root}")
 
 
+def _gh_only(root:Path, data:dict) -> bool:
+    "True when the project has a static `[project].version` and no package to build. Such a project is released on GitHub only."
+    if nested_idx(data, "project", "version") is None: return False
+    try: _find_pkg(root, data)
+    except FileNotFoundError: return True
+    return False
+
 def _load_release_yml(root: Path) -> dict | None:
     "Load label groups from .github/release.yml if it exists."
     for name in ("release.yml", "release.yaml"):
@@ -176,9 +183,9 @@ class ShipConfig:
     root: Path
     pyproject: Path
     data: dict
-    pkg: str
-    pkg_path: Path
-    init_file: Path
+    pkg: str | None
+    pkg_path: Path | None
+    init_file: Path | None
     changelog_file: Path
     branch: str
     label_groups: dict
@@ -189,6 +196,9 @@ class ShipConfig:
     def version(self) -> str:
         version = (_load_toml(self.pyproject).get("project") or {}).get("version")
         return version or _read_version(self.init_file)
+
+    @property
+    def gh_only(self) -> bool: return self.pkg is None
 
 
 @dataclass
@@ -212,9 +222,12 @@ def get_config(start: str | Path | None = None) -> ShipConfig:
     root = pyproj.parent
     data = _load_toml(pyproj)
 
-    pkg = _find_pkg(root, data)
-    pkg_path = _pkg_path(root, pkg, data)
-    init_file = pkg_path / _init
+    gh_only = _gh_only(root, data)
+    if gh_only and nested_idx(data, "tool", "uv", "workspace") is not None:
+        raise CliError(f"{pyproj} is a uv workspace root, not a project, so there is nothing to release")
+    pkg = None if gh_only else _find_pkg(root, data)
+    pkg_path = None if gh_only else _pkg_path(root, pkg, data)
+    init_file = None if gh_only else pkg_path / _init
 
     ship = nested_idx(data, "tool", "fastship") or {}
     if ship.get("release") not in (None, "tag"): raise ValueError('[tool.fastship].release must be "tag" when set')
@@ -690,7 +703,8 @@ class Release:
 
     async def release(self):
         "Tag and create a release in GitHub for the current version."
-        await self.gh.create_release(self.cfg.version, branch=self.cfg.branch, body=self.latest_notes())
+        notes = dict(generate_release_notes=True) if self.cfg.gh_only else dict(body=self.latest_notes())
+        await self.gh.create_release(self.cfg.version, branch=self.cfg.branch, **notes)
         return self
 
 
@@ -704,7 +718,8 @@ def _nbdev_release():
     from nbdev.config import is_nbdev
     if not is_nbdev(): return None
     pyproj = _find_pyproject()
-    if _project_type(pyproj.parent, _load_toml(pyproj)) != "python": return None
+    data = _load_toml(pyproj)
+    if _project_type(pyproj.parent, data) != "python" or _gh_only(pyproj.parent, data): return None
     import nbdev.release
     return nbdev.release
 
@@ -740,6 +755,7 @@ def _clean_dist(root: Path):
 
 
 async def _prepare_release(rel, no_changelog:bool = False, no_editor:bool = False, yes:bool = False):
+    if rel.cfg.gh_only: no_changelog = no_editor = True
     if not no_changelog: await rel.changelog()
     if not no_editor: subprocess.run([os.environ.get("EDITOR", "nano"), rel.changefile])
     if not yes and not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
@@ -880,7 +896,7 @@ async def ship_release(
     wheel_only: bool = False,  # Build a wheel directly instead of building an sdist first
     verbose: bool = False,  # Pass --verbose to twine upload
 ):
-    "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm/crate projects."
+    "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm/crate projects. A static version with no package is released on GitHub only."
     ftype, proj = _find_project()
     if ftype == "py":
         data = _load_toml(proj)
@@ -907,12 +923,12 @@ async def ship_release(
         return
     rel = Release(repo=repo, token=token)
     await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
-    _build_dist(rel.cfg, wheel_only=wheel_only)
+    if not rel.cfg.gh_only: _build_dist(rel.cfg, wheel_only=wheel_only)
     _commit_release(rel)
     version = rel.cfg.version
     await rel.release()
     print(f"GitHub release created: {version}")
-    _upload_dist(repository=repository, verbose=verbose)
+    if not rel.cfg.gh_only: _upload_dist(repository=repository, verbose=verbose)
     ship_bump()
     run("git commit -am bump")
     run("git push")
