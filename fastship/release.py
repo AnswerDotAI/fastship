@@ -1011,7 +1011,7 @@ def _prepare_new_root(root:Path, force:bool = False):
 
 def _template_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return f"""[build-system]
-requires = [\"setuptools>=68\", \"wheel\"]
+requires = [\"setuptools>=77\", \"wheel\"]
 build-backend = \"setuptools.build_meta\"
 
 [project]
@@ -1020,7 +1020,7 @@ dynamic = [\"version\"]
 description = \"{desc}\"
 readme = \"README.md\"
 requires-python = \">=3.10\"
-license = {{ text = \"Apache-2.0\" }}
+license = \"Apache-2.0\"
 authors = [{_authors_toml(proj_name)}]
 classifiers = [
   \"Programming Language :: Python :: 3\",
