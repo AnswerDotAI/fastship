@@ -1027,7 +1027,7 @@ def _prepare_new_root(root:Path, force:bool = False):
 
 def _template_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return f"""[build-system]
-requires = [\"setuptools>=77\", \"wheel\"]
+requires = [\"setuptools>=77\"]
 build-backend = \"setuptools.build_meta\"
 
 [project]
@@ -1366,7 +1366,7 @@ jobs:
 
 def _template_zig_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return f"""[build-system]
-requires = ["setuptools>=77", "wheel", "ziglang==0.15.2"]
+requires = ["setuptools>=77", "ziglang==0.15.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
