@@ -33,4 +33,6 @@ def test_gh_only_project(tmp_path, monkeypatch):
 def test_uv_workspace_root_is_not_releasable(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text(_pyproject + "\n[tool.uv.workspace]\nmembers = []\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
+    (tmp_path / "member").mkdir()
+    (tmp_path / "member/__init__.py").write_text("", encoding="utf-8")  # a member checkout is not the root's package
     with pytest.raises(relmod.CliError, match="workspace"): relmod.get_config()
