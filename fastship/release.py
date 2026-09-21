@@ -86,7 +86,9 @@ def _find_pkg(root: Path, data: dict) -> str:
         if any((base/cand/_init).exists() for base in _pkg_bases(root, data)): return cand
 
     # fallback: scan for any package folder (handles non-standard layouts)
-    for base in _pkg_bases(root, data):
+    # The folders in a uv workspace root are member projects, never the root's own package
+    bases = [] if nested_idx(data, "tool", "uv", "workspace") is not None else _pkg_bases(root, data)
+    for base in bases:
         if not base.exists(): continue
         cands = [p for p in base.iterdir() if p.is_dir() and (p / _init).exists() and not p.name.startswith(".")]
         if cands:
@@ -224,7 +226,7 @@ def get_config(start: str | Path | None = None) -> ShipConfig:
 
     gh_only = _gh_only(root, data)
     if gh_only and nested_idx(data, "tool", "uv", "workspace") is not None:
-        raise CliError(f"{pyproj} is a uv workspace root, not a project, so there is nothing to release")
+        raise CliError(f"{pyproj} is a uv workspace root. It has no package to release.")
     pkg = None if gh_only else _find_pkg(root, data)
     pkg_path = None if gh_only else _pkg_path(root, pkg, data)
     init_file = None if gh_only else pkg_path / _init
