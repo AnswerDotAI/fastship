@@ -2,6 +2,18 @@
 
 <!-- do not remove -->
 
+## 0.1.6
+
+### New Features
+
+- Add GitHub-only release mode for projects with a static version and no package; refuse uv workspace roots ([#44](https://github.com/AnswerDotAI/fastship/issues/44))
+
+### Bugs Squashed
+
+- `ship_release` no longer treats a workspace member as the root's package ([#45](https://github.com/AnswerDotAI/fastship/pull/45)), thanks to [@jph00](https://github.com/jph00)
+- fix license ([#43](https://github.com/AnswerDotAI/fastship/issues/43))
+
+
 ## 0.1.5
 
 ### New Features
