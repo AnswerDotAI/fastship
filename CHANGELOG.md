@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.1.7
+
+### New Features
+
+- Refactor release internals into shared helpers, mark bump commits with , and symlink LICENSE and site assets into the package ([#46](https://github.com/AnswerDotAI/fastship/issues/46))
+
+
 ## 0.1.6
 
 ### New Features
