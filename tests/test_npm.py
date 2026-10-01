@@ -54,7 +54,7 @@ def test_ship_npm_release_refuses_dirty_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(relmod, "_git_has_changes", lambda: True)
 
     with pytest.raises(relmod.CliError, match="Uncommitted changes"):
-        relmod._ship_npm_release()
+        relmod._ship_tag_release("npm")
 
 
 def test_ship_npm_release_tags_then_bumps(tmp_path, monkeypatch):
@@ -65,12 +65,12 @@ def test_ship_npm_release_tags_then_bumps(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(relmod, "run", lambda cmd, *a, **k: calls.append(cmd))
 
-    version = relmod._ship_npm_release()
+    version = relmod._ship_tag_release("npm")
 
     assert version == "0.1.2"
     assert any("git tag" in c and "v0.1.2" in c for c in calls)
     assert any(c == "git push origin v0.1.2" for c in calls)
-    assert calls.index("git commit -am bump") > calls.index("git push origin v0.1.2")  # bump follows the tag push
+    assert calls.index(relmod._BUMP_COMMIT) > calls.index("git push origin v0.1.2")  # bump follows the tag push
     assert '"version": "0.1.3"' in (tmp_path / "package.json").read_text(encoding="utf-8")
 
 

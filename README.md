@@ -125,7 +125,7 @@ ship-rs-new my-project  # create a new maturin/PyO3 project
 ship-rs-init            # configure an existing maturin/PyO3 project
 ship-rs-build            # maturin build --release -o dist
 ship-bump                # bump Cargo.toml version, then refresh the local editable install
-ship-release             # changelog, tag, publish via CI, then bump
+ship-release             # tag, publish via CI, then bump
 ```
 
 `ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, and exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module.
@@ -152,7 +152,7 @@ Commands:
 ship-zig-new my-project  # create a CFFI/Zig project
 ship-zig-build           # build and check the current platform wheel
 ship-bump                # bump the Python package version
-ship-release             # changelog, tag, publish via CI, then bump
+ship-release             # tag, publish via CI, then bump
 ```
 
 The generated workflow builds one Python-ABI-independent wheel for Linux x86_64, Linux ARM64, macOS Intel, and macOS Apple Silicon. Tagged builds create the GitHub release and publish to PyPI with trusted publishing.
@@ -233,6 +233,8 @@ ship-release        # generate changelog, release, bump version, push
 - A project with a static `[project].version` and no package to build is released on GitHub only. There is no build, PyPI upload or changelog. GitHub writes the release notes, and the bump updates `pyproject.toml`. A uv workspace root is refused, since it is not a project.
 - Maturin and fastship Zig projects push one annotated version tag for their trusted-publishing workflow, then bump - no changelog step, no prompts, no token needed.
 - npm projects (a `package.json` with no `pyproject.toml` anywhere nearer) refuse a dirty tree, push one annotated version tag for their trusted-publishing workflow, then bump `package.json`. Maturin and Zig releases refuse a dirty tree the same way.
+
+Every flow ends with a bump commit whose message contains `[skip ci]`, so pushing it starts no `push`-triggered GitHub Actions workflows, such as CI or docs deployment.
 
 For another project whose artifacts must be built and published by CI, select the same tag-driven flow explicitly:
 

@@ -23,11 +23,19 @@ from ghapi.core import *    # GhApi, APIError, ...
 
 GH_HOST = "https://api.github.com"
 CHANGELOG_MARKER = "<!-- do not remove -->\n"
+_NEW_CHANGELOG = f"# Release notes\n\n{CHANGELOG_MARKER}"
 
 DEFAULT_LABEL_GROUPS = dict(breaking="Breaking Changes", enhancement="New Features", bug="Bugs Squashed")
 
 _pyproj = "pyproject.toml"
 _init = "__init__.py"
+
+_NEW_VERSION = "0.1.0"
+_GH_ORG = "AnswerDotAI"
+_ZIG_REQ = "ziglang==0.16.0"
+_MATURIN_REQ = "maturin>=1.0,<2.0"
+_RS_DEV_DEPS = ["fastship>=0.0.11", _MATURIN_REQ, "pytest"]
+_BUMP_COMMIT = 'git commit -am "bump [skip ci]"'
 
 _re_version_any = re.compile(r"^__version__\s*=.*$", re.MULTILINE)
 _re_version_val = re.compile(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]\s*$", re.MULTILINE)
@@ -37,27 +45,38 @@ _re_version_val = re.compile(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]\s*$", re.M
 # Project discovery + config
 # ---------------------------------------------------------------------------
 
-def _find_pyproject(start: Path | None = None, fname: str = _pyproj) -> Path:
-    "Search `start` and parent directories for a `pyproject.toml`."
-    cfg_path = Path(start or Path().absolute())
-    while cfg_path != cfg_path.parent and not (cfg_path / fname).exists(): cfg_path = cfg_path.parent
-    p = cfg_path / fname
-    if not p.exists(): raise FileNotFoundError(f"Could not find {fname} (searched parents from {Path().absolute()})")
-    return p
+def _find_marker(start: Path | None, *fnames: str) -> Path:
+    "Find the nearest of `fnames` in `start` (default: the current directory) or its parents. Within each directory, `fnames` are tried in order."
+    p = Path(start or Path().absolute())
+    for d in [p, *p.parents]:
+        for f in fnames:
+            if (d/f).exists(): return d/f
+    raise FileNotFoundError(f"Could not find {' or '.join(fnames)} (searched parents from {Path().absolute()})")
 
+
+def _find_pyproject(start: Path | None = None) -> Path: return _find_marker(start, _pyproj)
+
+
+_MARKER_TYPES = {_pyproj: "py", "package.json": "npm", "Cargo.toml": "crate"}
 
 def _find_project(start: Path | None = None) -> tuple[str, Path]:
     "Nearest project marker up the tree: ('py', pyproject.toml), ('npm', package.json), or ('crate', Cargo.toml), in that priority order."
-    p = Path(start or Path().absolute())
-    while True:
-        if (p / _pyproj).exists(): return "py", p / _pyproj
-        if (p / "package.json").exists(): return "npm", p / "package.json"
-        if (p / "Cargo.toml").exists(): return "crate", p / "Cargo.toml"
-        if p == p.parent: raise FileNotFoundError(f"Could not find {_pyproj}, package.json, or Cargo.toml (searched parents from {Path().absolute()})")
-        p = p.parent
+    p = _find_marker(start, *_MARKER_TYPES)
+    return _MARKER_TYPES[p.name], p
 
 
 def _load_toml(p: Path) -> dict: return tomllib.loads(p.read_text(encoding="utf-8"))
+
+def _load_json(p: Path) -> dict: return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _ship_cfg(data:dict) -> dict: return nested_idx(data, "tool", "fastship") or {}
+
+
+def _is_uv_workspace(data:dict) -> bool: return nested_idx(data, "tool", "uv", "workspace") is not None
+
+
+def _static_version(pyproject:Path) -> str | None: return nested_idx(_load_toml(pyproject), "project", "version")
 
 
 def _norm_mod(name: str) -> str:
@@ -73,54 +92,28 @@ def _pkg_bases(root:Path, data:dict)->list[Path]:
     return list(dict.fromkeys([*bases, root/"src", root]))
 
 
-def _find_pkg(root: Path, data: dict) -> str:
-    "Find the package directory from [project].name or explicit [tool.fastship].package."
-    ship = nested_idx(data, "tool", "fastship") or {}
-    pkg = ship.get("package")
-    if pkg: return pkg
-
-    proj = data.get("project") or {}
-    nm = proj.get("name")
-    if nm:
-        cand = _norm_mod(nm)
-        if any((base/cand/_init).exists() for base in _pkg_bases(root, data)): return cand
-
-    # fallback: scan for any package folder (handles non-standard layouts)
+def _find_pkg_path(root: Path, data: dict) -> Path:
+    "Find the package directory. A `[tool.fastship].package` is searched for recursively. Without one, use the package named after `[project].name`, else the first package folder."
+    bases = [o for o in _pkg_bases(root, data) if o.exists()]
+    def top_level(pkg): return (b/pkg for b in bases if (b/pkg/_init).exists())
+    if pkg := _ship_cfg(data).get("package"):
+        nested = (p.parent for b in bases for p in b.rglob(_init) if p.parent.name == pkg)
+        if found := next(top_level(pkg), None) or next(nested, None): return found
+        raise FileNotFoundError(f"Could not find {pkg}/__init__.py under {root}")
+    if (nm := nested_idx(data, "project", "name")) and (found := next(top_level(_norm_mod(nm)), None)): return found
     # The folders in a uv workspace root are member projects, never the root's own package
-    bases = [] if nested_idx(data, "tool", "uv", "workspace") is not None else _pkg_bases(root, data)
-    for base in bases:
-        if not base.exists(): continue
-        cands = [p for p in base.iterdir() if p.is_dir() and (p / _init).exists() and not p.name.startswith(".")]
-        if cands:
-            if nm:
-                cand = _norm_mod(nm)
-                for p in cands:
-                    if p.name == cand: return cand
-            return cands[0].name
-
+    if not _is_uv_workspace(data):
+        found = next((p for b in bases for p in b.iterdir() if p.is_dir() and (p/_init).exists() and not p.name.startswith(".")), None)
+        if found: return found
     raise FileNotFoundError(
         f'Could not find package directory. Ensure [project].name in pyproject.toml '
         f'matches your package folder (e.g., "my-project" -> my_project/).')
 
 
-def _pkg_path(root: Path, pkg: str, data:dict) -> Path:
-    "Find the directory containing `pkg/__init__.py` (supports `src/` layout)."
-    for base in _pkg_bases(root, data):
-        if (base/pkg/_init).exists(): return base/pkg
-
-    # last-resort scan
-    for base in _pkg_bases(root, data):
-        if not base.exists(): continue
-        for p in base.rglob(_init):
-            if p.parent.name == pkg: return p.parent
-
-    raise FileNotFoundError(f"Could not find {pkg}/__init__.py under {root}")
-
-
 def _gh_only(root:Path, data:dict) -> bool:
     "True when the project has a static `[project].version` and no package to build. Such a project is released on GitHub only."
-    if nested_idx(data, "project", "version") is None: return False
-    try: _find_pkg(root, data)
+    if nested_idx(data, "project", "version") is None or _ship_cfg(data).get("package"): return False
+    try: _find_pkg_path(root, data)
     except FileNotFoundError: return True
     return False
 
@@ -129,7 +122,8 @@ def _load_release_yml(root: Path) -> dict | None:
     for name in ("release.yml", "release.yaml"):
         p = root / ".github" / name
         if p.exists():
-            data = _load_toml_or_yaml(p)
+            import yaml
+            data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
             categories = nested_idx(data, "changelog", "categories") or []
             groups = {}
             for cat in categories:
@@ -141,29 +135,23 @@ def _load_release_yml(root: Path) -> dict | None:
     return None
 
 
-def _load_toml_or_yaml(p: Path) -> dict:
-    "Load a TOML or YAML file."
-    txt = p.read_text(encoding="utf-8")
-    if p.suffix in (".yml", ".yaml"):
-        import yaml
-        return yaml.safe_load(txt) or {}
-    return tomllib.loads(txt)
 
-
-def _git_branch(default: str = "main") -> str:
-    try: return run("git branch --show-current").strip() or default
+def _git(cmd:str, default:str = "", path:Path = None) -> str:
+    "Run `git {cmd}` in `path` (default: the current directory) and return its stripped output, or `default` when git fails or prints nothing."
+    try: return run(f"git -C {_q(path)} {cmd}" if path else f"git {cmd}").strip() or default
     except Exception: return default
 
 
-def _git_owner_repo() -> tuple[str | None, str | None]:
-    try: return repo_details(run("git config --get remote.origin.url").strip())
-    except Exception: return None, None
+def _branch(ship:dict = None) -> str:
+    "Return `[tool.fastship].branch`, else `$FASTSHIP_BRANCH`, else the current git branch, else `main`."
+    return (ship or {}).get("branch") or os.getenv("FASTSHIP_BRANCH") or _git("branch --show-current", "main")
 
 
-def _parse_repo(repo: str = None) -> tuple[str | None, str | None]:
-    "Parse 'OWNER/REPO' string, falling back to git origin."
+def _parse_repo(repo:str = None, path:Path = None) -> tuple[str | None, str | None]:
+    "Parse 'OWNER/REPO' string, falling back to the git origin in `path`."
     if repo and "/" in repo: return repo.split("/", 1)
-    g_owner, g_repo = _git_owner_repo()
+    try: g_owner, g_repo = repo_details(_git("config --get remote.origin.url", path=path))
+    except Exception: g_owner = g_repo = None
     return g_owner, repo or g_repo
 
 
@@ -180,84 +168,80 @@ def _get_token(root: Path = None) -> str | None:
     return token or os.getenv("GITHUB_TOKEN")
 
 
+def _gh_api(owner:str = None, repo:str = None, token:str = None, root:Path = None) -> GhApi:
+    "Return a `GhApi` for `owner`/`repo`, authenticated with `token`, else `_get_token(root)`. Without `owner`, `_parse_repo` reads the owner from `repo` or from the git origin in `root`."
+    if not owner: owner, repo = _parse_repo(repo, root)
+    if not owner or not repo: raise CliError("Could not infer GitHub owner/repo. Pass --repo OWNER/REPO or set a git remote `origin`.")
+    token = token or _get_token(root)
+    if not token: raise CliError("Failed to find token (FASTSHIP_TOKEN, GITHUB_TOKEN, or a ./token file)")
+    return GhApi(owner, repo, token)
+
+
 @dataclass
-class ShipConfig:
+class _PyprojectConfig:
     root: Path
     pyproject: Path
     data: dict
+    branch: str
+    changelog_file: Path
+    label_groups: dict
+    version_files: list[Path]
+
+
+@dataclass
+class ShipConfig(_PyprojectConfig):
     pkg: str | None
     pkg_path: Path | None
     init_file: Path | None
-    changelog_file: Path
-    branch: str
-    label_groups: dict
     wheel_only: bool
-    version_files: list[Path]
 
     @property
-    def version(self) -> str:
-        version = (_load_toml(self.pyproject).get("project") or {}).get("version")
-        return version or _read_version(self.init_file)
+    def version(self) -> str: return _static_version(self.pyproject) or _read_version(self.init_file)
 
     @property
     def gh_only(self) -> bool: return self.pkg is None
 
 
 @dataclass
-class RustConfig:
-    root: Path
-    pyproject: Path
-    data: dict
+class RustConfig(_PyprojectConfig):
     manifest_path: Path
-    branch: str
-    changelog_file: Path
-    label_groups: dict
-    version_files: list[Path]
 
     @property
     def version(self) -> str: return _cargo_version(self.manifest_path)
 
 
+def _pyproject_settings(pyproj:Path, data:dict) -> dict:
+    "Fields shared by `ShipConfig` and `RustConfig`, read from `pyproj` and its `[tool.fastship]` table."
+    root, ship = pyproj.parent, _ship_cfg(data)
+    return dict(root=root, pyproject=pyproj, data=data, branch=_branch(ship), changelog_file=root/ship.get("changelog_file", "CHANGELOG.md"),
+        label_groups=_load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS, version_files=_version_files(root, ship))
+
+
 def get_config(start: str | Path | None = None) -> ShipConfig:
     "Load fastship config from `pyproject.toml`."
     pyproj = _find_pyproject(start)
-    root = pyproj.parent
-    data = _load_toml(pyproj)
-
-    gh_only = _gh_only(root, data)
-    if gh_only and nested_idx(data, "tool", "uv", "workspace") is not None:
-        raise CliError(f"{pyproj} is a uv workspace root. It has no package to release.")
-    pkg = None if gh_only else _find_pkg(root, data)
-    pkg_path = None if gh_only else _pkg_path(root, pkg, data)
-    init_file = None if gh_only else pkg_path / _init
-
-    ship = nested_idx(data, "tool", "fastship") or {}
+    root, data = pyproj.parent, _load_toml(pyproj)
+    pkg = pkg_path = init_file = None
+    if _gh_only(root, data):
+        if _is_uv_workspace(data): raise CliError(f"{pyproj} is a uv workspace root. It has no package to release.")
+    else:
+        pkg_path = _find_pkg_path(root, data)
+        pkg, init_file = pkg_path.name, pkg_path/_init
+    ship = _ship_cfg(data)
     if ship.get("release") not in (None, "tag"): raise ValueError('[tool.fastship].release must be "tag" when set')
-    changelog_file = root / ship.get("changelog_file", "CHANGELOG.md")
-    branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
-    label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
-    wheel_only = ship.get("wheel-only", False)
-    return ShipConfig(root=root, pyproject=pyproj, data=data, pkg=pkg, pkg_path=pkg_path, init_file=init_file, changelog_file=changelog_file,
-        branch=branch, label_groups=label_groups, wheel_only=wheel_only, version_files=_version_files(root, ship))
+    return ShipConfig(pkg=pkg, pkg_path=pkg_path, init_file=init_file, wheel_only=ship.get("wheel-only", False), **_pyproject_settings(pyproj, data))
 
 
 def get_rs_config(start: str | Path | None = None) -> RustConfig:
     "Load fastship config for a maturin/PyO3 project."
     pyproj = _find_pyproject(start)
-    root = pyproj.parent
     data = _load_toml(pyproj)
     proj = data.get("project") or {}
     if proj.get("version") is not None: raise ValueError(f'{pyproj} must use Cargo.toml for ship-rs versions; remove [project].version')
     dyn = proj.get("dynamic") or []
     if not isinstance(dyn, list) or "version" not in dyn: raise ValueError(f'{pyproj} must set [project].dynamic = ["version"] for ship-rs commands')
-    ship = nested_idx(data, "tool", "fastship") or {}
-    rs = ship.get("rs") or {}
-    branch = ship.get("branch") or os.getenv("FASTSHIP_BRANCH") or _git_branch()
-    manifest_path = root / rs.get("manifest_path", "Cargo.toml")
-    changelog_file = root / ship.get("changelog_file", "CHANGELOG.md")
-    label_groups = _load_release_yml(root) or ship.get("label_groups") or DEFAULT_LABEL_GROUPS
-    return RustConfig(root=root, pyproject=pyproj, data=data, manifest_path=manifest_path, branch=branch,
-        changelog_file=changelog_file, label_groups=label_groups, version_files=_version_files(root, ship))
+    manifest_path = pyproj.parent / (nested_idx(_ship_cfg(data), "rs", "manifest_path") or "Cargo.toml")
+    return RustConfig(manifest_path=manifest_path, **_pyproject_settings(pyproj, data))
 
 
 def _version_files(root:Path, ship:dict) -> list[Path]:
@@ -271,7 +255,7 @@ def _version_files(root:Path, ship:dict) -> list[Path]:
 def _project_type(root:Path, data:dict)->str:
     if (root/"Cargo.toml").exists() or _is_maturin_project(data): return "rust"
     reqs = nested_idx(data, "build-system", "requires") or []
-    if "zig" in (nested_idx(data, "tool", "fastship") or {}) or any(re.match(r"^ziglang(?:\W|$)", o) for o in reqs): return "zig"
+    if any(re.match(r"^ziglang(?:\W|$)", o) for o in reqs): return "zig"
     return "python"
 
 
@@ -284,17 +268,15 @@ class NpmConfig:
 
     @property
     def version(self) -> str:
-        v = json.loads(self.pkg_json.read_text(encoding="utf-8")).get("version")
+        v = _load_json(self.pkg_json).get("version")
         if not v: raise ValueError(f"No version field found in {self.pkg_json}")
         return v
 
 
 def get_npm_config(start: str | Path | None = None) -> NpmConfig:
     "Load fastship config for an npm (package.json, no pyproject.toml) project."
-    pkg_json = _find_pyproject(start, fname="package.json")
-    data = json.loads(pkg_json.read_text(encoding="utf-8"))
-    branch = os.getenv("FASTSHIP_BRANCH") or _git_branch()
-    return NpmConfig(root=pkg_json.parent, pkg_json=pkg_json, name=data.get("name", ""), branch=branch)
+    pkg_json = _find_marker(start, "package.json")
+    return NpmConfig(root=pkg_json.parent, pkg_json=pkg_json, name=_load_json(pkg_json).get("name", ""), branch=_branch())
 
 
 def _write_npm_version(pkg_json: Path, version: str):
@@ -319,22 +301,15 @@ class CrateConfig:
 
 def get_crate_config(start: str | Path | None = None) -> CrateConfig:
     "Load fastship config for a pure-Rust crate (Cargo.toml, no pyproject.toml)."
-    manifest = _find_pyproject(start, fname="Cargo.toml")
-    data = _load_toml(manifest)
-    branch = os.getenv("FASTSHIP_BRANCH") or _git_branch()
-    return CrateConfig(root=manifest.parent, manifest_path=manifest, name=nested_idx(data, "package", "name") or "", branch=branch)
+    manifest = _find_marker(start, "Cargo.toml")
+    name = nested_idx(_load_toml(manifest), "package", "name") or ""
+    return CrateConfig(root=manifest.parent, manifest_path=manifest, name=name, branch=_branch())
 
 
 def _cargo_bump(cfg, part:int = None, unbump:bool = False):
     "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited), printing old and new."
-    old = cfg.version
-    print(f"Old version: {old}")
-    new = bump_version(old, part=part, unbump=unbump)
-    copies = _read_copies(cfg.version_files, old)
-    _replace_toml_section_key(cfg.manifest_path, _cargo_version_section(cfg.manifest_path), "version", new)
-    _write_copies(copies, old, new)
-    print(f"New version: {new}")
-    return new
+    write = partial(_replace_toml_section_key, cfg.manifest_path, _cargo_version_section(cfg.manifest_path), "version")
+    return _bump(cfg.version, write, cfg.version_files, part, unbump)
 
 
 # ---------------------------------------------------------------------------
@@ -388,32 +363,26 @@ def _write_version(init_file: Path, version: str):
 
     ver_line = f'__version__ = "{version}"'
     out = kept[:insert_at] + [ver_line, ""] + kept[insert_at:]
-    init_file.write_text("\n".join(out) + "\n", encoding="utf-8")
+    _write_lines(init_file, out)
 
 
 def _write_config_version(cfg:ShipConfig, version:str):
-    "Write the version back to the source used by this project."
-    old = cfg.version
-    copies = _read_copies(cfg.version_files, old)
-    if (_load_toml(cfg.pyproject).get("project") or {}).get("version") is not None:
-        _replace_toml_section_key(cfg.pyproject, "project", "version", version)
+    "Write `version` to `[project].version` when the pyproject sets it statically, else to `__version__` in the package's `__init__.py`."
+    if _static_version(cfg.pyproject) is not None: _replace_toml_section_key(cfg.pyproject, "project", "version", version)
     else: _write_version(cfg.init_file, version)
-    _write_copies(copies, old, version)
 
 
-def _read_copies(paths:list[Path], old:str) -> dict[Path,str]:
-    "Contents of each version copy, checked to hold `old` exactly once before anything is written."
-    copies = {}
-    for path in paths:
-        text = path.read_text(encoding="utf-8")
-        if text.count(old) != 1: raise ValueError(f"Expected exactly one {old!r} in {path}")
-        copies[path] = text
-    return copies
-
-
-def _write_copies(copies:dict[Path,str], old:str, new:str):
-    "Rewrite each copy read by `_read_copies` with `old` replaced by `new`."
-    for path, text in copies.items(): path.write_text(text.replace(old, new), encoding="utf-8")
+def _bump(old:str, write, version_files:list[Path] = (), part:int = None, unbump:bool = False) -> str:
+    "Bump `old`, write the new version with `write`, and replace `old` in each of `version_files`, printing both versions. If a version file does not hold `old` exactly once, raise `ValueError` before writing anything."
+    print(f"Old version: {old}")
+    new = bump_version(old, part=part, unbump=unbump)
+    copies = {p: p.read_text(encoding="utf-8") for p in version_files}
+    for p, text in copies.items():
+        if text.count(old) != 1: raise ValueError(f"Expected exactly one {old!r} in {p}")
+    write(new)
+    for p, text in copies.items(): p.write_text(text.replace(old, new), encoding="utf-8")
+    print(f"New version: {new}")
+    return new
 
 
 def bump_version(version: str, part: int = None, unbump: bool = False) -> str:
@@ -438,20 +407,18 @@ def bump_version(version: str, part: int = None, unbump: bool = False) -> str:
 def _q(s) -> str: return shlex.quote(str(s))
 
 
+def _write_lines(p:Path, lines:list[str]): p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _replace_toml_section_key(p:Path, section:str, key:str, val:str):
     "Replace `key = ...` inside a top-level TOML section."
     lines = p.read_text(encoding="utf-8").splitlines()
-    in_sec = False
-    pat = re.compile(rf"^(\s*{re.escape(key)}\s*=\s*).*$")
-    for i, ln in enumerate(lines):
-        if re.match(r"^\s*\[[^\[].*\]\s*$", ln):
-            in_sec = ln.strip() == f"[{section}]"
-            continue
-        if in_sec and pat.match(ln):
-            lines[i] = f'{key} = "{val}"'
-            p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            return
-    raise ValueError(f"Could not find {key!r} in [{section}] of {p}")
+    start, end = _toml_section_bounds(lines, section)
+    pat = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    hits = [i for i in range(start + 1, end) if pat.match(lines[i])] if start is not None else []
+    if not hits: raise ValueError(f"Could not find {key!r} in [{section}] of {p}")
+    lines[hits[0]] = f'{key} = "{val}"'
+    _write_lines(p, lines)
 
 
 def _maturin_cmd(command:str, release:bool = False, target:str = None, outdir:str = None, args:str = "") -> str:
@@ -486,7 +453,8 @@ def _cargo_version(manifest:Path) -> str:
 
 
 def _fmt_toml_val(v):
-    if isinstance(v, list): return "[" + ", ".join(f'"{o}"' for o in v) + "]"
+    if isinstance(v, bool): return str(v).lower()
+    if isinstance(v, (list, tuple)): return "[" + ", ".join(f'"{o}"' for o in v) + "]"
     return f'"{v}"'
 
 
@@ -502,23 +470,16 @@ def _ensure_toml_section(p:Path, section:str, items:dict, replace:bool = False):
     "Ensure a TOML section contains key/value pairs, preserving existing keys unless `replace`."
     lines = p.read_text(encoding="utf-8").splitlines()
     start, end = _toml_section_bounds(lines, section)
+    vals = {k: f"{k} = {_fmt_toml_val(v)}" for k, v in items.items()}
     if start is None:
         if lines and lines[-1].strip(): lines.append("")
-        lines += [f"[{section}]"] + [f"{k} = {_fmt_toml_val(v)}" for k, v in items.items()]
-        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return
-    existing = {}
-    for i in range(start + 1, end):
-        m = re.match(r"^(\s*([A-Za-z0-9_-]+)\s*=\s*).*$", lines[i])
-        if m: existing[m.group(2)] = i
-    inserts = []
-    for k, v in items.items():
-        val = f"{k} = {_fmt_toml_val(v)}"
-        if k in existing:
-            if replace: lines[existing[k]] = val
-        else: inserts.append(val)
-    if inserts: lines[end:end] = inserts
-    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines += [f"[{section}]", *vals.values()]
+    else:
+        existing = {m.group(1): i for i in range(start + 1, end) if (m := re.match(r"^\s*([A-Za-z0-9_-]+)\s*=", lines[i]))}
+        if replace:
+            for k in vals.keys() & existing.keys(): lines[existing[k]] = vals[k]
+        lines[end:end] = [val for k, val in vals.items() if k not in existing]
+    _write_lines(p, lines)
 
 
 def _ensure_project_dynamic_version(p:Path):
@@ -551,7 +512,7 @@ def _ensure_project_dynamic_version(p:Path):
     val = f"dynamic = {_fmt_toml_val(dyn)}"
     if dynamic_range is not None: lines[dynamic_range[0]:dynamic_range[1]] = [val]
     else: lines.insert((name_idx or start) + 1, val)
-    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _write_lines(p, lines)
 
 
 def _rs_module_name(data:dict) -> str | None:
@@ -603,24 +564,9 @@ def _ensure_py_runtime_version(root:Path, data:dict):
         names = [o.strip() for o in m.group(2).split(",")]
         if "__version__" not in names: names.insert(0, "__version__")
         lines[i] = f"from {m.group(1)} import {', '.join(names)}"
-        init.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _write_lines(init, lines)
         return
     _warn(f"found literal __version__ in {init} but could not find a simple import from `{pkg}.{ext}`; left Python wrapper unchanged")
-
-
-def _init_rs_config(root:Path, branch:str = None, force:bool = False):
-    pyproj = _find_pyproject(root)
-    data = _load_toml(pyproj)
-    if not _is_maturin_project(data): raise CliError(f"{pyproj} does not look like a maturin project")
-    manifest = pyproj.parent / "Cargo.toml"
-    if not manifest.exists(): raise CliError(f"Missing {manifest}")
-    _ensure_project_dynamic_version(pyproj)
-    _ensure_toml_section(pyproj, "project.optional-dependencies", dict(dev=["fastship>=0.0.11", "maturin>=1.0,<2.0", "pytest"]))
-    _ensure_rs_runtime_version(root, data)
-    _ensure_py_runtime_version(root, data)
-    branch = branch or nested_idx(data, "tool", "fastship", "branch") or _git_branch()
-    _ensure_toml_section(pyproj, "tool.fastship", dict(branch=branch), replace=force)
-    return pyproj
 
 
 # ---------------------------------------------------------------------------
@@ -644,19 +590,9 @@ class Release:
         "Create CHANGELOG.md from closed GitHub issues and publish GitHub releases."
         self.cfg = cfg or get_config()
         self.changefile = self.cfg.changelog_file
-
-        if not groups: groups = dict(self.cfg.label_groups) if self.cfg.label_groups else DEFAULT_LABEL_GROUPS
-
+        self.groups = groups or self.cfg.label_groups
         os.chdir(self.cfg.root)
-
-        owner, repo = _parse_repo(repo) if not owner else (owner, repo)
-        if not owner or not repo: raise Exception("Could not infer GitHub owner/repo. Pass --repo OWNER/REPO or set a git remote `origin`.")
-
-        token = token or _get_token(self.cfg.root)
-        if not token: raise Exception("Failed to find token (FASTSHIP_TOKEN, GITHUB_TOKEN, or a ./token file)")
-
-        self.gh = GhApi(owner, repo, token)
-        self.groups = groups
+        self.gh = _gh_api(owner, repo, token, self.cfg.root)
 
     async def _issues(self, label):
         return await self.gh.issues.list_for_repo(state="closed", sort="created", filter="all", since=self.commit_date, labels=label)
@@ -667,7 +603,7 @@ class Release:
         Issues are pulled since the latest GitHub release's `published_at`.
         If no releases exist, all matching issues are included.
         """
-        if not self.changefile.exists(): self.changefile.write_text(f"# Release notes\n\n{CHANGELOG_MARKER}", encoding="utf-8")
+        if not self.changefile.exists(): self.changefile.write_text(_NEW_CHANGELOG, encoding="utf-8")
 
         try:
             lr = await self.gh.repos.get_latest_release()
@@ -716,12 +652,11 @@ class Release:
 
 
 def _nbdev_release():
-    "The `nbdev.release` module if the nbdev flow releases this project; None for non-nbdev projects, and for nbdev-docs-over-maturin repos, which the tag flow releases."
-    from nbdev.config import is_nbdev
-    if not is_nbdev(): return None
-    pyproj = _find_pyproject()
+    "Return the `nbdev.release` module when the nearest project is an nbdev Python project, else None. nbdev-docs-over-maturin repos get None, because the tag flow releases them."
+    ftype, pyproj = _find_project()
+    if ftype != "py": return None
     data = _load_toml(pyproj)
-    if _project_type(pyproj.parent, data) != "python" or _gh_only(pyproj.parent, data): return None
+    if nested_idx(data, "tool", "nbdev") is None or _project_type(pyproj.parent, data) != "python" or _gh_only(pyproj.parent, data): return None
     import nbdev.release
     return nbdev.release
 
@@ -734,18 +669,12 @@ def ship_bump(
     "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust (pure crates skip the reinstall); package.json for npm; else `__init__.py`."
     if (nbr := _nbdev_release()): return nbr.nbdev_bump_version(part=part, unbump=unbump)
     ftype, pyproj = _find_project()
-    if ftype == "npm":
-        _npm_bump(part=part, unbump=unbump)
-        return
-    if ftype == "crate":
-        _cargo_bump(get_crate_config(), part=part, unbump=unbump)
-        return
-    if (pyproj.parent / "Cargo.toml").exists(): return ship_rs_bump(part=part, unbump=unbump)
-    cfg = get_config()
-    print(f"Old version: {cfg.version}")
-    new = bump_version(cfg.version, part=part, unbump=unbump)
-    _write_config_version(cfg, new)
-    print(f"New version: {new}")
+    if ftype == "npm": _npm_bump(part=part, unbump=unbump)
+    elif ftype == "crate": _cargo_bump(get_crate_config(), part=part, unbump=unbump)
+    elif _project_type(pyproj.parent, _load_toml(pyproj)) == "rust": ship_rs_bump(part=part, unbump=unbump)
+    else:
+        cfg = get_config()
+        _bump(cfg.version, partial(_write_config_version, cfg), cfg.version_files, part, unbump)
 
 
 def _clean_dist(root: Path):
@@ -763,9 +692,9 @@ async def _prepare_release(rel, no_changelog:bool = False, no_editor:bool = Fals
     if not yes and not input("Make release now? (y/n) ").lower().startswith("y"): sys.exit(1)
 
 
-def _commit_release(rel, push:bool = True):
+def _commit_release():
     if _git_has_changes(): run("git commit -am release")
-    if push: run("git push")
+    run("git push")
 
 
 def _build_dist(cfg, wheel_only:bool = False, quiet:bool = False):
@@ -802,11 +731,7 @@ async def ship_pages(
     token: str = None,  # GitHub token (FASTSHIP_TOKEN/GITHUB_TOKEN/token file used otherwise)
 ):
     "Enable GitHub Pages from main:/ and use its URL as the repository homepage."
-    owner, repo = _git_owner_repo()
-    if not owner or not repo: raise CliError("Could not infer GitHub owner/repo from origin")
-    token = token or _get_token()
-    if not token: raise CliError("No GitHub token found")
-    gh = GhApi(owner, repo, token)
+    gh = _gh_api(token=token)
     pages = await gh.repos.create_pages_site(build_type="legacy", source={"branch":"main", "path":"/"})
     await gh.repos.update(homepage=pages.html_url)
     print(f"GitHub Pages enabled: {pages.html_url}")
@@ -836,53 +761,32 @@ async def ship_release_gh(
         return await nbr.release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
     rel = Release(repo=repo, token=token)
     await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
-    _commit_release(rel)
+    _commit_release()
     print(f"GitHub release created: {(await rel.release()).cfg.version}")
-
-
-def _push_release_tag(cfg, remote:str = "origin"):
-    tag = f"v{cfg.version}"
-    os.chdir(cfg.root)
-    run(f"git tag -a {_q(tag)} -m {_q(tag)}")
-    run(f"git push {_q(remote)} {_q(cfg.branch)}")
-    run(f"git push {_q(remote)} {_q(tag)}")
-    return tag
 
 
 def _npm_bump(part:int = None, unbump:bool = False):
     cfg = get_npm_config()
-    print(f"Old version: {cfg.version}")
-    new = bump_version(cfg.version, part=part, unbump=unbump)
-    _write_npm_version(cfg.pkg_json, new)
-    print(f"New version: {new}")
-    return new
+    return _bump(cfg.version, partial(_write_npm_version, cfg.pkg_json), part=part, unbump=unbump)
 
 
-def _ship_npm_release(remote:str = "origin"):
-    "Tag `v<version>` and push branch + tag (CI publishes to npm and creates the GitHub release), then bump."
-    cfg = get_npm_config()
-    os.chdir(cfg.root)
-    if _git_has_changes(): raise CliError("Uncommitted changes: commit or stash before releasing")
-    version = cfg.version
-    tag = _push_release_tag(cfg)
-    _npm_bump()
-    run("git commit -am bump")
+def _bump_and_push():
+    "Bump the version, then commit and push it with a message that skips GitHub Actions `push` workflows."
+    ship_bump()
+    run(_BUMP_COMMIT)
     run("git push")
-    print(f"Release started: {tag}")
-    return version
-
 
 
 def _ship_tag_release(kind:str):
     "Tag `v<version>` and push branch + tag (CI builds, publishes, and writes release notes), then bump."
-    cfg = get_crate_config() if kind == "crate" else get_rs_config() if kind == "rust" else get_config()
+    cfg = dict(crate=get_crate_config, rust=get_rs_config, npm=get_npm_config).get(kind, get_config)()
     os.chdir(cfg.root)
     if _git_has_changes(): raise CliError("Uncommitted changes: commit or stash before releasing")
-    version = cfg.version
-    tag = _push_release_tag(cfg)
-    ship_bump()
-    run("git commit -am bump")
-    run("git push")
+    version, tag = cfg.version, f"v{cfg.version}"
+    run(f"git tag -a {_q(tag)} -m {_q(tag)}")
+    run(f"git push origin {_q(cfg.branch)}")
+    run(f"git push origin {_q(tag)}")
+    _bump_and_push()
     print(f"Release started: {tag}")
     return version
 
@@ -900,40 +804,28 @@ async def ship_release(
 ):
     "Release the project, bump the version, and push: changelog+PyPI for Python/nbdev; flag-free tag-push (CI publishes) for Rust/Zig/npm/crate projects. A static version with no package is released on GitHub only."
     ftype, proj = _find_project()
-    if ftype == "py":
-        data = _load_toml(proj)
-        if nested_idx(data, "tool", "fastship", "release") == "tag":
-            _ship_tag_release(_project_type(proj.parent, data))
-            return
+    data = _load_toml(proj) if ftype == "py" else {}
+    kind = _project_type(proj.parent, data) if ftype == "py" else ftype
+    if _ship_cfg(data).get("release") == "tag":
+        _ship_tag_release(kind)
+        return
     if _nbdev_release():
         await ship_release_gh(token=token, repo=repo, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
         ship_pypi(repository=repository, wheel_only=wheel_only, verbose=verbose)
-        ship_bump()
-        run("git commit -am bump")
-        run("git push")
+        _bump_and_push()
         return
-    if ftype == "npm":
-        _ship_npm_release()
-        return
-    if ftype == "crate":
-        _ship_tag_release("crate")
-        return
-    pyproj = proj
-    kind = _project_type(pyproj.parent, _load_toml(pyproj))
     if kind != "python":
         _ship_tag_release(kind)
         return
     rel = Release(repo=repo, token=token)
     await _prepare_release(rel, no_changelog=no_changelog, no_editor=no_editor, yes=yes)
     if not rel.cfg.gh_only: _build_dist(rel.cfg, wheel_only=wheel_only)
-    _commit_release(rel)
+    _commit_release()
     version = rel.cfg.version
     await rel.release()
     print(f"GitHub release created: {version}")
     if not rel.cfg.gh_only: _upload_dist(repository=repository, verbose=verbose)
-    ship_bump()
-    run("git commit -am bump")
-    run("git push")
+    _bump_and_push()
     print(f"Released {version}")
 
 
@@ -943,8 +835,15 @@ def ship_rs_init(
     force: bool = False,  # Replace existing [tool.fastship] keys
 ):
     "Configure an existing maturin/PyO3 project for fastship Rust commands."
-    root = _find_pyproject().parent
-    pyproj = _init_rs_config(root, branch=branch, force=force)
+    pyproj = _find_pyproject()
+    root, data = pyproj.parent, _load_toml(pyproj)
+    if not _is_maturin_project(data): raise CliError(f"{pyproj} does not look like a maturin project")
+    if not (root/"Cargo.toml").exists(): raise CliError(f"Missing {root/'Cargo.toml'}")
+    _ensure_project_dynamic_version(pyproj)
+    _ensure_toml_section(pyproj, "project.optional-dependencies", dict(dev=_RS_DEV_DEPS))
+    _ensure_rs_runtime_version(root, data)
+    _ensure_py_runtime_version(root, data)
+    _ensure_toml_section(pyproj, "tool.fastship", dict(branch=branch or _branch(_ship_cfg(data))), replace=force)
     print(f"Updated {pyproj}")
 
 
@@ -987,114 +886,165 @@ def ship_rs_bump(part: int = 2, unbump: bool = False):
 # Project scaffolding
 # ---------------------------------------------------------------------------
 
-def _slugify_pkg(name:str)->str:
-    "Best-effort convert a project name to a valid Python package name."
-    pkg = name.strip().replace("-", "_").replace(" ", "_")
-    pkg = re.sub(r"[^0-9A-Za-z_]", "_", pkg)
-    pkg = re.sub(r"_+", "_", pkg).strip("_")
-    if not pkg: pkg = "pkg"
-    if re.match(r"^\d", pkg): pkg = "pkg_" + pkg
-    return pkg
+_LICENSE = "Apache-2.0"
+_SETUPTOOLS_REQ = "setuptools>=77"
+_PIP_DEV = "pip install -e .[dev]"
+_PY_CLASSIFIERS = ["Programming Language :: Python :: 3", "Programming Language :: Python :: 3 :: Only"]
+_TAG_RELEASE = "`ship-release` pushes a `v<version>` tag, which starts the release workflow in GitHub Actions, then bumps the version."
+_ACTIONS = dict(checkout="actions/checkout@v7", setup_python="actions/setup-python@v7", rust="dtolnay/rust-toolchain@stable",
+    maturin="PyO3/maturin-action@v1", cibuildwheel="pypa/cibuildwheel@v4.2.0", upload="actions/upload-artifact@v7",
+    download="actions/download-artifact@v8", gh_release="softprops/action-gh-release@v3", pypi="pypa/gh-action-pypi-publish@release/v1",
+    crates_auth="rust-lang/crates-io-auth-action@v1")
 
-def _git_cfg(key:str)->str:
-    "A git config value, or '' when unset."
-    try: return run(f"git config --get {key}").strip()
-    except OSError: return ""
+def _slug(name:str, sep:str = "_", lower:bool = False) -> str:
+    "Slugify `name`, replacing each run of characters other than ASCII letters and digits with `sep`. An empty slug becomes `pkg`. A slug that starts with a digit gets a `pkg` prefix."
+    s = re.sub(r"[^0-9A-Za-z]+", sep, name.lower() if lower else name).strip(sep) or "pkg"
+    return f"pkg{sep}{s}" if s[0].isdigit() else s
+
+def _names(name:str, package:str = None) -> tuple[str, str]:
+    "Return the distribution name slugged from `name`, and the package name. The package name is `package` when given, else the distribution name slugged with underscores."
+    dist = _slug(name, "-", lower=True)
+    return dist, package or _slug(dist)
 
 def _authors_toml(proj_name:str)->str:
     "pyproject `authors` entry from git's global config, else a generic contributors entry."
-    name,email = _git_cfg("user.name"),_git_cfg("user.email")
+    name,email = _git("config --get user.name"),_git("config --get user.email")
     if not name: return f'{{name = "{proj_name} contributors"}}'
     return f'{{name = "{name}", email = "{email}"}}' if email else f'{{name = "{name}"}}'
 
-def _slugify_dist(name:str)->str:
-    "Best-effort convert a project name to a PyPI/Cargo-style distribution name."
-    dist = name.strip().lower().replace("_", "-").replace(" ", "-")
-    dist = re.sub(r"[^0-9a-zA-Z-]", "-", dist)
-    dist = re.sub(r"-+", "-", dist).strip("-")
-    if not dist: dist = "pkg"
-    if re.match(r"^\d", dist): dist = "pkg-" + dist
-    return dist
+def _gh_url(org:str, proj:str) -> str: return f"https://github.com/{org}/{proj}"
 
 def _write(p:Path, s:str):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8")
 
-def _prepare_new_root(root:Path, force:bool = False):
+def _read_asset(name:str)->str: return importlib.resources.files("fastship").joinpath(*Path(name).parts).read_text(encoding="utf-8")
+
+def _scaffold(root:Path, files:dict, force:bool = False, site:bool = True) -> Path:
+    "Create the project directory `root` with `files` (relative path -> text), a LICENSE and a .gitignore. When `site` is true, also add the GitHub Pages site files."
     root = root.expanduser()
     if root.exists():
         if not force: raise FileExistsError(f"{root} already exists (use force=True to overwrite)")
         shutil.rmtree(root)
+    files = {"LICENSE": _read_asset("LICENSE"), ".gitignore": _template_gitignore(), **files}
+    if site: files |= {o: _read_asset(o) for o in ("_config.yml", "_layouts/default.html")}
+    for name, text in files.items(): _write(root/name, text)
     return root
 
-def _template_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
-    return f"""[build-system]
-requires = [\"setuptools>=77\"]
-build-backend = \"setuptools.build_meta\"
+def _created(root:Path, *cmds:str) -> Path:
+    "Print the new project's location and the commands to run next, then return `root`."
+    print(f"Created {root}")
+    print(f"Next:\n  cd {root}")
+    for o in cmds: print(f"  {o}")
+    return root
 
-[project]
-name = \"{proj_name}\"
-dynamic = [\"version\"]
-description = \"{desc}\"
-readme = \"README.md\"
-requires-python = \">=3.10\"
-license = \"Apache-2.0\"
-authors = [{_authors_toml(proj_name)}]
-classifiers = [
-  \"Programming Language :: Python :: 3\",
-  \"Programming Language :: Python :: 3 :: Only\",
-]
+def _bash(*cmds:str) -> str: return "```bash\n%s\n```" % "\n".join(cmds)
 
-dependencies = []
+def _md(title:str, intro:str, sections:dict) -> str:
+    "Build a markdown document with heading `title`, then `intro` when given, then one `##` section per `sections` item."
+    return "\n\n".join([f"# {title}", *([intro] if intro else []), *(f"## {k}\n\n{v}" for k, v in sections.items())]) + "\n"
 
-[project.optional-dependencies]
-dev = [
-  \"fastship\",
-  \"build\",
-  \"twine\",
-]
+def _tag_readme(proj:str, intro:str, test:str, notes:str, setup:tuple = (_PIP_DEV,), build:str = None) -> str:
+    "Build the README of a project released by a version-tag workflow. It lists the `setup` and `test` commands, the optional `build` command, and the release steps, followed by `notes`."
+    sections = {"Development": _bash(*setup, test)}
+    if build: sections["Build"] = _bash(build)
+    sections["Release"] = f"{_bash(test, 'ship-release')}\n\n{_TAG_RELEASE} {notes}"
+    return _md(proj, intro, sections)
 
-[project.urls]
-Homepage = \"https://github.com/{gh_org}/{proj_name}\"
+def _pyproject(
+    proj:str, # Distribution name
+    desc:str, # Project description
+    gh_org:str, # GitHub organization for the project URLs
+    classifiers:list, # Trove classifiers
+    dev:list, # Requirements for the `dev` extra
+    tool:list = (), # Further `[tool.*]` tables, as TOML text
+    deps:list = (), # Runtime dependencies
+    requires:list = (_SETUPTOOLS_REQ,), # Build requirements
+    backend:str = "setuptools.build_meta", # Build backend
+    license:str = None, # TOML value for `[project].license`, defaulting to the SPDX expression `_LICENSE`
+    ship:dict = None, # `[tool.fastship]` keys besides `branch = "main"`
+) -> str:
+    "Text of a scaffolded `pyproject.toml`."
+    url = _gh_url(gh_org, proj)
+    fastship = "\n".join(f"{k} = {_fmt_toml_val(v)}" for k, v in {"branch": "main", **(ship or {})}.items())
+    return "\n\n".join([f'[build-system]\nrequires = {_fmt_toml_val(requires)}\nbuild-backend = "{backend}"',
+        f"""[project]
+name = "{proj}"
+dynamic = ["version"]
+description = "{desc}"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {license or _fmt_toml_val(_LICENSE)}
+authors = [{_authors_toml(proj)}]
+classifiers = {_fmt_toml_val(classifiers)}
+dependencies = {_fmt_toml_val(deps)}""",
+        f"[project.optional-dependencies]\ndev = {_fmt_toml_val(dev)}",
+        f'[project.urls]\nHomepage = "{url}"\nRepository = "{url}"\nIssues = "{url}/issues"',
+        f"[tool.fastship]\n{fastship}", *tool]) + "\n"
 
-[tool.setuptools.dynamic]
-version = {{ attr = \"{pkg_name}.__version__\" }}
+def _setuptools_tables(pkg:str) -> list[str]:
+    "Return `[tool.setuptools]` tables that package only `pkg` and read the version from `pkg.__version__`."
+    return ['[tool.setuptools.dynamic]\nversion = { attr = "%s.__version__" }' % pkg, f'[tool.setuptools.packages.find]\ninclude = ["{pkg}"]']
 
-[tool.setuptools.packages.find]
-include = [\"{pkg_name}\"]
+def _cargo_package(proj:str, desc:str, gh_org:str) -> str:
+    "`[package]` table of a scaffolded `Cargo.toml`."
+    return "\n".join(["[package]", f'name = "{proj}"', f'version = "{_NEW_VERSION}"', 'edition = "2024"', f'license = "{_LICENSE}"',
+        f'description = "{desc}"', f'repository = "{_gh_url(gh_org, proj)}"'])
+
+_WORKFLOW = """name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+%(jobs)s
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: %(needs)s
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+%(publish)s"""
+
+_PYPI_PUBLISH = """      - uses: %(download)s
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: %(gh_release)s
+        with:
+          files: dist/*
+          generate_release_notes: true
+      - uses: %(pypi)s
 """
+
+def _workflow(jobs:str, needs:str, publish:str = _PYPI_PUBLISH) -> str:
+    "CI workflow that runs `jobs` on pushes and pull requests, then on `v*` tags runs the `publish` steps after the `needs` jobs. `jobs` and `publish` name actions by their `_ACTIONS` keys."
+    return _WORKFLOW % dict(jobs=jobs % _ACTIONS, needs=needs, publish=publish % _ACTIONS)
+
+_RS_HELLO = """pub fn hello(name: &str) -> String {
+    format!("Hello, {name}!")
+}
+"""
+
+def _template_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
+    return _pyproject(proj_name, desc, gh_org, _PY_CLASSIFIERS, ["fastship", "build", "twine"], _setuptools_tables(pkg_name))
 
 def _template_readme(proj_name:str, pkg_name:str)->str:
-    return f"""# {proj_name}
-
-A modern Python package scaffolded by **fastship**.
-
-## Development
-
-```bash
-pip install -e .[dev]
-```
-
-## Versioning
-
-Version lives in `{pkg_name}/__init__.py` as `__version__`.
-Bump it with:
-
-```bash
-ship-bump --part 2   # patch
-ship-bump --part 1   # minor
-ship-bump --part 0   # major
-```
-
-## Release
-
-1) Ensure your GitHub issues are labeled (`bug`, `enhancement`, `breaking`).
-2) Run:
-
-```bash
-ship-release
-```
-"""
+    labels = ", ".join(f"`{o}`" for o in DEFAULT_LABEL_GROUPS)
+    bump = _bash("ship-bump --part 2   # patch", "ship-bump --part 1   # minor", "ship-bump --part 0   # major")
+    return _md(proj_name, "A modern Python package scaffolded by **fastship**.", {
+        "Development": _bash(_PIP_DEV),
+        "Versioning": f"Version lives in `{pkg_name}/__init__.py` as `__version__`.\nBump it with:\n\n{bump}",
+        "Release": f"1) Ensure your GitHub issues are labeled ({labels}).\n2) Run:\n\n{_bash('ship-release')}"})
 
 def _template_gitignore()->str:
     return """__pycache__/
@@ -1113,73 +1063,21 @@ venv/
 Cargo.lock
 """
 
-def _template_manifest()->str:
-    return """include README.md
-include LICENSE
-include CHANGELOG.md
-"""
-
-def _read_license():
-    "Read the Apache 2.0 license from the package."
-    return importlib.resources.files("fastship").joinpath("LICENSE").read_text(encoding="utf-8")
-
-def _read_asset(name:str)->str: return importlib.resources.files("fastship").joinpath(*Path(name).parts).read_text(encoding="utf-8")
-
-def _write_site(root:Path):
-    for name in ("_config.yml", "_layouts/default.html"): _write(root/name, _read_asset(name))
+def _template_manifest(*extra:str)->str: return "\n".join(["include README.md", "include LICENSE", *extra]) + "\n"
 
 def _template_rs_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
-    return f"""[build-system]
-requires = [\"maturin>=1.0,<2.0\"]
-build-backend = \"maturin\"
+    maturin = f'[tool.maturin]\nfeatures = ["extension-module"]\npython-source = "python"\nmodule-name = "{pkg_name}._core"'
+    uv = '[tool.uv]\ncache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = ".git/fastws-cargo-key" }]'
+    classifiers = ["Programming Language :: Rust", "Programming Language :: Python :: Implementation :: CPython"]
+    return _pyproject(proj_name, desc, gh_org, classifiers, _RS_DEV_DEPS, [maturin, uv, '[tool.pytest.ini_options]\ntestpaths = ["tests"]'],
+        requires=[_MATURIN_REQ], backend="maturin", license='{text = "%s"}' % _LICENSE)
 
-[project]
-name = \"{proj_name}\"
-dynamic = [\"version\"]
-description = \"{desc}\"
-license = {{text = \"Apache-2.0\"}}
-requires-python = \">=3.10\"
-readme = \"README.md\"
-authors = [{_authors_toml(proj_name)}]
-classifiers = [
-    \"Programming Language :: Rust\",
-    \"Programming Language :: Python :: Implementation :: CPython\",
-]
-
-[project.optional-dependencies]
-dev = [\"fastship>=0.0.11\", \"maturin>=1.0,<2.0\", \"pytest\"]
-
-[project.urls]
-Homepage = \"https://github.com/{gh_org}/{proj_name}\"
-Repository = \"https://github.com/{gh_org}/{proj_name}\"
-Issues = \"https://github.com/{gh_org}/{proj_name}/issues\"
-
-[tool.maturin]
-features = [\"extension-module\"]
-python-source = \"python\"
-module-name = \"{pkg_name}._core\"
-
-[tool.uv]
-cache-keys = [{{ file = \"pyproject.toml\" }}, {{ file = \"src/**/*.rs\" }}, {{ file = \"Cargo.toml\" }}, {{ file = \".git/fastws-cargo-key\" }}]
-
-[tool.fastship]
-branch = \"main\"
-
-[tool.pytest.ini_options]
-testpaths = [\"tests\"]
-"""
-
-def _template_cargo_toml(proj_name:str, pkg_name:str, desc:str)->str:
-    return f"""[package]
-name = \"{proj_name}\"
-version = \"0.1.0\"
-edition = \"2021\"
-license = \"Apache-2.0\"
-description = \"{desc}\"
+def _template_cargo_toml(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
+    return _cargo_package(proj_name, desc, gh_org) + f"""
 
 [lib]
-name = \"{pkg_name}\"
-crate-type = [\"cdylib\", \"rlib\"]
+name = "{pkg_name}"
+crate-type = ["cdylib", "rlib"]
 
 [profile.release]
 lto = false
@@ -1199,17 +1097,14 @@ strip = true
 incremental = false
 
 [dependencies]
-pyo3 = \">=0.28\"
+pyo3 = ">=0.28"
 
 [features]
-extension-module = [\"pyo3/extension-module\"]
+extension-module = ["pyo3/extension-module"]
 """
 
 def _template_rs_lib()->str:
-    return """pub fn hello(name: &str) -> String {
-    format!("Hello, {name}!")
-}
-
+    return _RS_HELLO + """
 use pyo3::prelude::*;
 
 #[pyfunction(name = "hello")]
@@ -1238,77 +1133,24 @@ def test_hello():
     assert hello("fastship") == "Hello, fastship!"
 """
 
-def _template_rs_readme(proj_name:str)->str:
-    return f"""# {proj_name}
+def _template_rs_readme(proj_name:str, test:str, build:str)->str:
+    return _tag_readme(proj_name, "PyO3/maturin package scaffolded by fastship.", test,
+        "The workflow builds the wheels and sdist and publishes them to GitHub and PyPI.", build=build)
 
-PyO3/maturin package scaffolded by fastship.
-
-## Development
-
-```bash
-pip install -e .[dev]
-maturin develop && pytest -q
-```
-
-## Build
-
-```bash
-ship-rs-build
-```
-
-## Release
-
-```bash
-maturin develop && pytest -q
-ship-release
-```
-
-`ship-release` tags the Cargo version, leaves wheel publication to GitHub Actions, then bumps the project.
-"""
-
-def _template_rs_dev()->str:
-    return """# Development
-
-## Commands
-
-```bash
-maturin develop && pytest -q
-ship-rs-build
-```
-
-## Versioning
-
-The canonical version lives in `Cargo.toml`. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.
-
-## Build profiles
-
-uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. CI builds distributed wheels with `dist`, which enables full LTO and one codegen unit, disables incremental compilation, and strips the result.
-
-## Release
-
-1. Run `maturin develop && pytest -q`.
-2. Confirm the release version in `Cargo.toml` (`[package].version`).
-3. Run `ship-release`.
-
-Fastship commits the changelog, pushes the version tag for GitHub Actions, then bumps and pushes `Cargo.toml`.
-"""
+def _template_rs_dev(test:str, build:str)->str:
+    return _md("Development", "", {
+        "Commands": _bash(test, build),
+        "Versioning": 'The canonical version lives in `Cargo.toml`. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.',
+        "Build profiles": "uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. CI builds distributed wheels with `dist`, which enables full LTO and one codegen unit, disables incremental compilation, and strips the result.",
+        "Release": f"1. Run `{test}`.\n2. Confirm the release version in `Cargo.toml` (`[package].version`).\n3. Run `ship-release`.\n\n{_TAG_RELEASE}"})
 
 def _template_rs_workflow()->str:
-    return """name: CI
-
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-
-jobs:
-  test:
+    return _workflow("""  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v7
+      - uses: %(checkout)s
+      - uses: %(rust)s
+      - uses: %(setup_python)s
         with:
           python-version: '3.12'
       - run: pip install -e '.[dev]'
@@ -1321,12 +1163,12 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: PyO3/maturin-action@v1
+      - uses: %(checkout)s
+      - uses: %(maturin)s
         with:
           args: --profile dist --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
           manylinux: auto
-      - uses: actions/upload-artifact@v7
+      - uses: %(upload)s
         with:
           name: wheels-${{ matrix.os }}
           path: dist
@@ -1334,92 +1176,26 @@ jobs:
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: PyO3/maturin-action@v1
+      - uses: %(checkout)s
+      - uses: %(maturin)s
         with:
           command: sdist
           args: -o dist
-      - uses: actions/upload-artifact@v7
+      - uses: %(upload)s
         with:
           name: wheels-sdist
           path: dist
-
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, sdist]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*
-          generate_release_notes: true
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-"""
+""", "[build, sdist]")
 
 def _template_zig_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
-    return f"""[build-system]
-requires = ["setuptools>=77", "ziglang==0.15.2"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "{proj_name}"
-dynamic = ["version"]
-description = "{desc}"
-readme = "README.md"
-requires-python = ">=3.10"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
-authors = [{_authors_toml(proj_name)}]
-classifiers = [
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-]
-dependencies = ["cffi"]
-
-[project.optional-dependencies]
-dev = ["fastship", "build", "cibuildwheel~=3.4", "ziglang==0.15.2", "pytest"]
-
-[project.urls]
-Homepage = "https://github.com/{gh_org}/{proj_name}"
-
-[tool.setuptools.dynamic]
-version = {{ attr = "{pkg_name}.__version__" }}
-
-[tool.setuptools.packages.find]
-include = ["{pkg_name}"]
-
-[tool.setuptools.package-data]
-{pkg_name} = ["_lib/*"]
-
-[tool.fastship]
-branch = "main"
-wheel-only = true
-
-[tool.fastship.zig]
-version = "0.15.2"
-
-[tool.cibuildwheel]
-build = "cp311-*"
-skip = "*-musllinux_* *-win32"
-test-requires = "pytest"
-test-command = "pytest {{project}}/tests"
-
-[tool.cibuildwheel.macos]
-environment = {{ MACOSX_DEPLOYMENT_TARGET = "13.0" }}
-"""
+    return _pyproject(proj_name, desc, gh_org, _PY_CLASSIFIERS, ["fastship", "build", "cibuildwheel~=3.4", _ZIG_REQ, "pytest"],
+        _setuptools_tables(pkg_name) + [f'[tool.setuptools.package-data]\n{pkg_name} = ["_lib/*"]',
+            '[tool.cibuildwheel]\nbuild = "cp311-*"\nskip = "*-musllinux_* *-win32"\ntest-requires = "pytest"\ntest-command = "pytest {project}/tests"',
+            '[tool.cibuildwheel.macos]\nenvironment = { MACOSX_DEPLOYMENT_TARGET = "13.0" }'],
+        deps=["cffi"], requires=[_SETUPTOOLS_REQ, _ZIG_REQ], ship={"wheel-only": True})
 
 def _template_zig_setup()->str:
-    return r"""import subprocess,sys
+    return """import subprocess,sys
 from pathlib import Path
 from setuptools import Distribution,setup
 from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
@@ -1439,134 +1215,72 @@ class BinaryWheel(_bdist_wheel):
 setup(cmdclass={'bdist_wheel': BinaryWheel}, distclass=BinaryDistribution)
 """
 
+def _template_zig_libpath(pkg_name:str)->str:
+    return """import sys
+from pathlib import Path
+
+LIB_PATH = Path(__file__).parent/"_lib"/{"darwin": "lib%(pkg)s.dylib", "win32": "%(pkg)s.dll"}.get(sys.platform, "lib%(pkg)s.so")
+""" % dict(pkg=pkg_name)
+
 def _template_zig_build(pkg_name:str)->str:
-    return f'''import importlib.metadata,subprocess,sys,tomllib
+    return """import importlib.metadata,runpy,subprocess,sys,tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 
-def _name():
-    if sys.platform == "darwin": return "lib{pkg_name}.dylib"
-    if sys.platform == "win32": return "{pkg_name}.dll"
-    return "lib{pkg_name}.so"
-
 def main():
-    with open(ROOT/"pyproject.toml", "rb") as f: version = tomllib.load(f)["tool"]["fastship"]["zig"]["version"]
-    if (found := importlib.metadata.version("ziglang")) != version: sys.exit(f"ziglang is {{found}}; expected {{version}}")
-    dest = ROOT/"{pkg_name}"/"_lib"
-    dest.mkdir(exist_ok=True)
-    out = dest/_name()
-    subprocess.run([sys.executable, "-m", "ziglang", "build-lib", "src/lib.zig", "-dynamic", "-O", "ReleaseFast", f"-femit-bin={{out}}"], cwd=ROOT, check=True)
-    print(f"Bundled: {{out.name}}")
+    with open(ROOT/"pyproject.toml", "rb") as f: reqs = tomllib.load(f)["build-system"]["requires"]
+    version = next(o.split("==")[1] for o in reqs if o.startswith("ziglang=="))
+    if (found := importlib.metadata.version("ziglang")) != version: sys.exit(f"ziglang is {found}; expected {version}")
+    out = runpy.run_path(str(ROOT/"%s"/"_libpath.py"))["LIB_PATH"]
+    out.parent.mkdir(exist_ok=True)
+    subprocess.run([sys.executable, "-m", "ziglang", "build-lib", "src/lib.zig", "-dynamic", "-O", "ReleaseFast", f"-femit-bin={out}"], cwd=ROOT, check=True)
+    print(f"Bundled: {out.name}")
 
 if __name__ == "__main__": main()
-'''
+""" % pkg_name
 
 def _template_zig_lib()->str:
-    return r"""export fn add(a: c_int, b: c_int) c_int {
+    return """export fn add(a: c_int, b: c_int) c_int {
     return a + b;
 }
 """
 
-def _template_zig_ffi(pkg_name:str)->str:
-    return f'''import sys
-from pathlib import Path
-from cffi import FFI
-
-def _name():
-    if sys.platform == "darwin": return "lib{pkg_name}.dylib"
-    if sys.platform == "win32": return "{pkg_name}.dll"
-    return "lib{pkg_name}.so"
+def _template_zig_ffi()->str:
+    return """from cffi import FFI
+from ._libpath import LIB_PATH
 
 ffi = FFI()
 ffi.cdef("int add(int a, int b);")
-lib = ffi.dlopen(str(Path(__file__).parent/"_lib"/_name()))
+lib = ffi.dlopen(str(LIB_PATH))
 
 def add(a, b): return lib.add(a, b)
-'''
+"""
 
 def _template_zig_init()->str:
-    return r'''__version__ = "0.1.0"
+    return f"""__version__ = "{_NEW_VERSION}"
 
 from ._ffi import add
 
 __all__ = ["add"]
-'''
+"""
 
 def _template_zig_test(pkg_name:str)->str:
-    return f'''from {pkg_name} import add
+    return f"""from {pkg_name} import add
 
 def test_add(): assert add(2, 3) == 5
-'''
-
-def _template_zig_manifest(pkg_name:str)->str:
-    return f"""include README.md
-include LICENSE
-include CHANGELOG.md
-include build_lib.py
-include setup.py
-recursive-include src *.zig
-recursive-exclude {pkg_name}/_lib *
 """
 
-def _template_zig_readme(proj_name:str)->str:
-    return f"""# {proj_name}
+def _template_zig_readme(proj_name:str, test:str, build:str)->str:
+    return _tag_readme(proj_name, "Python CFFI bindings over a bundled Zig shared library, scaffolded by fastship.", test,
+        "The workflow builds one Python-ABI-independent wheel for each supported platform and publishes the wheels to GitHub and PyPI.", build=build)
 
-Python CFFI bindings over a bundled Zig shared library, scaffolded by fastship.
-
-## Development
-
-```bash
-pip install -e .[dev]
-python build_lib.py
-pytest -q
-```
-
-## Build
-
-```bash
-ship-zig-build
-```
-
-## Release
-
-```bash
-ship-release
-```
-
-The GitHub workflow builds one Python-ABI-independent wheel for each supported platform and publishes tagged releases to GitHub and PyPI.
-"""
-
-def _template_zig_dev()->str:
-    return r"""# Development
-
-`src/lib.zig` exports the C ABI consumed by the CFFI declarations in the Python package. `build_lib.py` compiles and bundles the shared library.
-
-## Commands
-
-```bash
-python build_lib.py
-pytest -q
-ship-zig-build
-```
-
-`ship-release` generates the changelog, tags the current version, and leaves the wheel matrix and trusted publication to GitHub Actions.
-"""
+def _template_zig_dev(test:str, build:str)->str:
+    return _md("Development", "`src/lib.zig` exports the C ABI consumed by the CFFI declarations in the Python package. `build_lib.py` compiles the shared library to the path in `_libpath.py`, which the package loads.",
+        {"Commands": _bash(test, build), "Release": _TAG_RELEASE})
 
 def _template_zig_workflow()->str:
-    return r"""name: CI
-
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-
-permissions:
-  contents: read
-
-jobs:
-  build:
+    return _workflow("""  build:
     strategy:
       fail-fast: false
       matrix:
@@ -1585,58 +1299,17 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: pypa/cibuildwheel@v4.2.0
+      - uses: %(checkout)s
+      - uses: %(cibuildwheel)s
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
         with:
           output-dir: wheelhouse
-      - uses: actions/upload-artifact@v7
+      - uses: %(upload)s
         with:
           name: wheels-${{ matrix.name }}
           path: wheelhouse/*.whl
-
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: wheels-*
-          path: dist
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*.whl
-          generate_release_notes: true
-      - uses: pypa/gh-action-pypi-publish@release/v1
-"""
-
-def _create_zig_project(name:str, package:str = None, description:str = "A Zig-backed Python package",
-    path:str = ".", gh_org:str = "AnswerDotAI", force:bool = False):
-    proj = _slugify_dist(name)
-    pkg = package or _slugify_pkg(proj)
-    root = _prepare_new_root(Path(path)/proj, force)
-    _write(root/"pyproject.toml", _template_zig_pyproject(proj, pkg, description, gh_org))
-    _write(root/"setup.py", _template_zig_setup())
-    _write(root/"build_lib.py", _template_zig_build(pkg))
-    _write(root/"src"/"lib.zig", _template_zig_lib())
-    _write(root/pkg/"__init__.py", _template_zig_init())
-    _write(root/pkg/"_ffi.py", _template_zig_ffi(pkg))
-    _write(root/"tests"/"test_basic.py", _template_zig_test(pkg))
-    _write(root/"README.md", _template_zig_readme(proj))
-    _write(root/"DEV.md", _template_zig_dev())
-    _write(root/"CHANGELOG.md", f"{CHANGELOG_MARKER}\n")
-    _write(root/"LICENSE", _read_license())
-    _write(root/"MANIFEST.in", _template_zig_manifest(pkg))
-    _write(root/".gitignore", _template_gitignore())
-    _write(root/".github"/"workflows"/"ci.yml", _template_zig_workflow())
-    _write_site(root)
-    return root
+""", "build")
 
 @call_parse
 def ship_zig_new(
@@ -1644,35 +1317,26 @@ def ship_zig_new(
     package: str = None,    # Python package import name (defaults from `name`)
     description: str = "A Zig-backed Python package",  # Short project description
     path: str = ".",        # Directory to create the project folder in
-    gh_org: str = "AnswerDotAI",  # GitHub organization for project.urls
+    gh_org: str = _GH_ORG,  # GitHub organization for project.urls
     force: bool = False,    # Overwrite if the folder already exists
 ):
     "Create a CFFI/Zig project with platform wheels and trusted tag publishing."
-    root = _create_zig_project(name, package=package, description=description, path=path, gh_org=gh_org, force=force)
-    print(f"Created {root}")
-    print(f"Next:\n  cd {root}")
-    print("  pip install -e .[dev]")
-    print("  python build_lib.py && pytest -q")
-    return root
-
-def _create_rs_project(name:str, package:str = None, description:str = "A PyO3 package", path:str = ".", gh_org:str = "AnswerDotAI", force:bool = False):
-    "Create a maturin/PyO3 project and return its root."
-    proj = _slugify_dist(name)
-    pkg = package or _slugify_pkg(proj)
-    root = _prepare_new_root(Path(path) / proj, force)
-
-    _write(root/"pyproject.toml", _template_rs_pyproject(proj, pkg, description, gh_org))
-    _write(root/"Cargo.toml", _template_cargo_toml(proj, pkg, description))
-    _write(root/"src"/"lib.rs", _template_rs_lib())
-    _write(root/"python"/pkg/"__init__.py", _template_rs_init())
-    _write(root/"tests"/"test_basic.py", _template_rs_test(pkg))
-    _write(root/"README.md", _template_rs_readme(proj))
-    _write(root/"DEV.md", _template_rs_dev())
-    _write(root/"LICENSE", _read_license())
-    _write(root/".gitignore", _template_gitignore())
-    _write(root/".github"/"workflows"/"ci.yml", _template_rs_workflow())
-    _write_site(root)
-    return root
+    proj, pkg = _names(name, package)
+    test, build = "python build_lib.py && pytest -q", "ship-zig-build"
+    root = _scaffold(Path(path)/proj, {
+        "pyproject.toml": _template_zig_pyproject(proj, pkg, description, gh_org),
+        "setup.py": _template_zig_setup(),
+        "build_lib.py": _template_zig_build(pkg),
+        "src/lib.zig": _template_zig_lib(),
+        f"{pkg}/__init__.py": _template_zig_init(),
+        f"{pkg}/_libpath.py": _template_zig_libpath(pkg),
+        f"{pkg}/_ffi.py": _template_zig_ffi(),
+        "tests/test_basic.py": _template_zig_test(pkg),
+        "README.md": _template_zig_readme(proj, test, build),
+        "DEV.md": _template_zig_dev(test, build),
+        "MANIFEST.in": _template_manifest("include build_lib.py", "include setup.py", "recursive-include src *.zig", f"recursive-exclude {pkg}/_lib *"),
+        ".github/workflows/ci.yml": _template_zig_workflow()}, force)
+    return _created(root, _PIP_DEV, test)
 
 @call_parse
 def ship_rs_new(
@@ -1680,35 +1344,26 @@ def ship_rs_new(
     package: str = None,    # Python package import name, e.g. "my_project" (defaults from `name`)
     description: str = "A PyO3 package",  # Short project description
     path: str = ".",        # Directory to create the project folder in
-    gh_org: str = "AnswerDotAI",  # GitHub organization for project.urls
+    gh_org: str = _GH_ORG,  # GitHub organization for project.urls
     force: bool = False,    # Overwrite if the folder already exists
 ):
     "Create a maturin/PyO3 project wired for fastship Rust commands."
-    root = _create_rs_project(name, package=package, description=description, path=path, gh_org=gh_org, force=force)
+    proj, pkg = _names(name, package)
+    test, build = "maturin develop && pytest -q", "ship-rs-build"
+    root = _scaffold(Path(path)/proj, {
+        "pyproject.toml": _template_rs_pyproject(proj, pkg, description, gh_org),
+        "Cargo.toml": _template_cargo_toml(proj, pkg, description, gh_org),
+        "src/lib.rs": _template_rs_lib(),
+        f"python/{pkg}/__init__.py": _template_rs_init(),
+        "tests/test_basic.py": _template_rs_test(pkg),
+        "README.md": _template_rs_readme(proj, test, build),
+        "DEV.md": _template_rs_dev(test, build),
+        ".github/workflows/ci.yml": _template_rs_workflow()}, force)
+    return _created(root, _PIP_DEV, test)
 
-    print(f"Created {root}")
-    print(f"Next:\n  cd {root}")
-    print("  pip install -e .[dev]")
-    print("  maturin develop && pytest -q")
-
-
-def _template_crate_cargo_toml(proj_name:str, desc:str, gh_org:str)->str:
-    return f"""[package]
-name = \"{proj_name}\"
-version = \"0.1.0\"
-edition = \"2024\"
-license = \"Apache-2.0\"
-description = \"{desc}\"
-repository = \"https://github.com/{gh_org}/{proj_name}\"
-
-[dependencies]
-"""
 
 def _template_crate_lib()->str:
-    return """pub fn hello(name: &str) -> String {
-    format!("Hello, {name}!")
-}
-
+    return _RS_HELLO + """
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1720,92 +1375,47 @@ mod tests {
 }
 """
 
-def _template_crate_readme(proj_name:str, desc:str)->str:
-    return f"""# {proj_name}
-
-{desc}
-
-## Development
-
-```bash
-cargo test
-```
-
-## Release
-
-```bash
-cargo test
-ship-release
-```
-
-`ship-release` tags the Cargo version and pushes; CI publishes to crates.io via trusted publishing and creates the GitHub release, then fastship bumps `Cargo.toml`.
-
-First release only: publish manually with a token (`cargo publish`), then add this repo's `ci.yml` as a trusted publisher in the crate's crates.io settings; later tags publish tokenlessly via CI.
-"""
+def _template_crate_readme(proj_name:str, desc:str, test:str)->str:
+    return _tag_readme(proj_name, desc, test, "The workflow publishes the crate to crates.io and creates the GitHub release. "
+        "For the first release, publish manually with a token (`cargo publish`), then add this repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. "
+        "Later tags publish through CI without a token.", setup=())
 
 def _template_crate_workflow()->str:
-    return """name: CI
-
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-
-jobs:
-  test:
+    return _workflow("""  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: %(checkout)s
+      - uses: %(rust)s
       - run: cargo test
-
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+""", "test", """      - uses: %(checkout)s
+      - uses: %(rust)s
       - id: auth
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: %(crates_auth)s
       - run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-      - uses: softprops/action-gh-release@v3
+      - uses: %(gh_release)s
         with:
           generate_release_notes: true
-"""
-
-def _create_crate_project(name:str, description:str = "A Rust crate", path:str = ".", gh_org:str = "AnswerDotAI", force:bool = False):
-    "Create a pure-Rust crate project and return its root."
-    proj = _slugify_dist(name)
-    root = _prepare_new_root(Path(path) / proj, force)
-    _write(root/"Cargo.toml", _template_crate_cargo_toml(proj, description, gh_org))
-    _write(root/"src"/"lib.rs", _template_crate_lib())
-    _write(root/"README.md", _template_crate_readme(proj, description))
-    _write(root/"LICENSE", _read_license())
-    _write(root/".gitignore", _template_gitignore())
-    _write(root/".github"/"workflows"/"ci.yml", _template_crate_workflow())
-    return root
+""")
 
 @call_parse
 def ship_crate_new(
     name: str,              # Crate name (crates.io name), e.g. "my-crate"
     description: str = "A Rust crate",  # Short crate description
     path: str = ".",        # Directory to create the project folder in
-    gh_org: str = "AnswerDotAI",  # GitHub organization for [package].repository
+    gh_org: str = _GH_ORG,  # GitHub organization for [package].repository
     force: bool = False,    # Overwrite if the folder already exists
 ):
     "Create a pure-Rust crate wired for fastship tag releases and crates.io trusted publishing."
-    root = _create_crate_project(name, description=description, path=path, gh_org=gh_org, force=force)
-    print(f"Created {root}")
-    print(f"Next:\n  cd {root}")
-    print("  cargo test")
-    return root
+    proj, _ = _names(name)
+    test = "cargo test"
+    root = _scaffold(Path(path)/proj, {
+        "Cargo.toml": _cargo_package(proj, description, gh_org) + "\n\n[dependencies]\n",
+        "src/lib.rs": _template_crate_lib(),
+        "README.md": _template_crate_readme(proj, description, test),
+        ".github/workflows/ci.yml": _template_crate_workflow()}, force, site=False)
+    return _created(root, test)
 
 
 @call_parse
@@ -1814,26 +1424,18 @@ def ship_new(
     package: str = None,    # Python package import name, e.g. "my_project" (defaults from `name`)
     description: str = "A Python package",  # Short project description
     path: str = ".",        # Directory to create the project folder in
-    gh_org: str = "AnswerDotAI",  # GitHub organization for project.urls
+    gh_org: str = _GH_ORG,  # GitHub organization for project.urls
     force: bool = False,    # Overwrite if the folder already exists
 ):
     "Create a modern setuptools project wired for fastship."
-    pkg = package or _slugify_pkg(name)
-    root = _prepare_new_root(Path(path) / name, force)
-
-    _write(root/"pyproject.toml", _template_pyproject(name, pkg, description, gh_org))
-    _write(root/"README.md", _template_readme(name, pkg))
-    _write(root/"CHANGELOG.md", "<!-- do not remove -->\n\n")
-    _write(root/"LICENSE", _read_license())
-    _write(root/"MANIFEST.in", _template_manifest())
-    _write(root/".gitignore", _template_gitignore())
-    _write(root/pkg/"__init__.py", '__version__ = "0.1.0"\n')
-    _write_site(root)
-
-    print(f"Created {root}")
-    print(f"Next:\n  cd {root}")
-    print("  pip install -e .[dev]")
-    return root
+    proj, pkg = _names(name, package)
+    root = _scaffold(Path(path)/proj, {
+        "pyproject.toml": _template_pyproject(proj, pkg, description, gh_org),
+        "README.md": _template_readme(proj, pkg),
+        "CHANGELOG.md": _NEW_CHANGELOG,
+        "MANIFEST.in": _template_manifest("include CHANGELOG.md"),
+        f"{pkg}/__init__.py": f'__version__ = "{_NEW_VERSION}"\n'}, force)
+    return _created(root, _PIP_DEV)
 
 
 # ---------------------------------------------------------------------------
@@ -1879,13 +1481,7 @@ async def ship_pr(
         if has_changes: g.commit('-am', title)
         g.push('-u', 'origin', pr_branch)
 
-        owner, repo_name = repo.split('/', 1) if repo and '/' in repo else repo_details(g.config('--get', 'remote.origin.url').strip())
-        if not owner or not repo_name: raise CliError("Could not determine GitHub repo. Use --repo OWNER/REPO")
-
-        token = token or _get_token(Path(path))
-        if not token: raise CliError("No GitHub token found")
-
-        gh = GhApi(owner, repo_name, token)
+        gh = _gh_api(repo=repo, token=token, root=Path(path))
         if body == '-': pr_body = sys.stdin.read().strip()
         else: pr_body = Path(body).read_text().strip() if body and '\n' not in body and os.path.exists(body) else body
         pr = await gh.pulls.create(title=title, head=pr_branch, base=default, body=pr_body)

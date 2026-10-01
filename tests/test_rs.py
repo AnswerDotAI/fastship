@@ -180,7 +180,7 @@ def test_ship_tag_release_needs_no_token_or_flags(tmp_path, monkeypatch):
     assert any("git tag" in c and "v0.1.2" in c for c in calls)
     assert any(c == "git push origin v0.1.2" for c in calls)
     assert 'version = "0.1.3"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")  # patch bump after the tag
-    assert calls.index("git commit -am bump") > calls.index("git push origin v0.1.2")
+    assert calls.index(relmod._BUMP_COMMIT) > calls.index("git push origin v0.1.2")
 
 
 def test_ship_tag_release_refuses_dirty_tree(tmp_path, monkeypatch):

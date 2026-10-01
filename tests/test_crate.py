@@ -52,12 +52,12 @@ def test_ship_crate_release_tags_then_bumps(tmp_path, monkeypatch):
     assert version == "0.1.2"
     assert any("git tag" in c and "v0.1.2" in c for c in calls)
     assert any(c == "git push origin v0.1.2" for c in calls)
-    assert calls.index("git commit -am bump") > calls.index("git push origin v0.1.2")  # bump follows the tag push
+    assert calls.index(relmod._BUMP_COMMIT) > calls.index("git push origin v0.1.2")  # bump follows the tag push
     assert 'version = "0.1.3"' in (tmp_path / "Cargo.toml").read_text(encoding="utf-8")
 
 
 def test_ship_crate_new_scaffold(tmp_path):
-    root = relmod._create_crate_project("My Crate", description="Does things", path=tmp_path)
+    root = relmod.ship_crate_new("My Crate", description="Does things", path=tmp_path)
 
     assert root == tmp_path / "my-crate"
     cargo = (root / "Cargo.toml").read_text(encoding="utf-8")

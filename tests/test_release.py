@@ -45,7 +45,7 @@ version-files = ["bazel/versions.bzl"]
         "git tag -a v0.0.2026082005.post1 -m v0.0.2026082005.post1",
         "git push origin main",
         "git push origin v0.0.2026082005.post1",
-        "git commit -am bump",
+        relmod._BUMP_COMMIT,
         "git push"]
     assert 'version = "0.0.2026082005.post2"' in (tmp_path / "pyproject.toml").read_text()
     assert versions.read_text() == 'XMOJO_VERSION="0.0.2026082005.post2"\n'
@@ -58,9 +58,9 @@ def test_version_files_are_validated_before_writing(tmp_path):
     pyproject.write_text('[project]\nname = "demo"\nversion = "1.0.post1"\n', encoding="utf-8")
     copy = tmp_path / "version.txt"
     copy.write_text("1.0.post1 twice: 1.0.post1\n", encoding="utf-8")
-    cfg = SimpleNamespace(version="1.0.post1", pyproject=pyproject, init_file=None, version_files=[copy])
+    cfg = SimpleNamespace(pyproject=pyproject, init_file=None)
 
-    with pytest.raises(ValueError, match="exactly one"): relmod._write_config_version(cfg, "1.0.post2")
+    with pytest.raises(ValueError, match="exactly one"): relmod._bump("1.0.post1", lambda v: relmod._write_config_version(cfg, v), [copy])
 
     assert 'version = "1.0.post1"' in pyproject.read_text()
     assert copy.read_text() == "1.0.post1 twice: 1.0.post1\n"
@@ -153,7 +153,7 @@ def test_ship_release_builds_before_publishing(monkeypatch):
 
     asyncio.run(relmod.ship_release(token="tok", repo="owner/repo", repository="pypi", no_changelog=True, no_editor=True, yes=True))
 
-    assert [o[0] for o in calls] == ["prepare", "build", "commit", "gh", "upload", "bump", "git commit -am bump", "git push"]
+    assert [o[0] for o in calls] == ["prepare", "build", "commit", "gh", "upload", "bump", relmod._BUMP_COMMIT, "git push"]
 
 
 def test_build_dist_can_be_wheel_only(monkeypatch, tmp_path):

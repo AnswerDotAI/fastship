@@ -64,4 +64,4 @@ include-package-data = false
 include = ["fastship"]
 
 [tool.setuptools.package-data]
-fastship = ["_config.yml", "_layouts/*.html"]
+fastship = ["_config.yml", "_layouts/*.html", "LICENSE"]

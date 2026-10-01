@@ -85,11 +85,11 @@ def test_fastship_own_config():
 
 def test_ship_new_creates_project():
     "ship_new should create a complete project with LICENSE from package"
-    from fastship.release import ship_new, _read_license
+    from fastship.release import ship_new, _read_asset
     with tempfile.TemporaryDirectory() as tmp:
         root = ship_new("test-proj", path=tmp)
         assert (root / "LICENSE").exists()
-        assert (root / "LICENSE").read_text() == _read_license()
+        assert (root / "LICENSE").read_text() == _read_asset("LICENSE")
         assert (root / "pyproject.toml").exists()
         assert (root / "test_proj" / "__init__.py").exists()
         assert "Apache License" in (root / "LICENSE").read_text()
