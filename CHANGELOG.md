@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.1.8
+
+### New Features
+
+- Build ship-rs-build wheels via PEP 517 backend with python -m build, replacing release flag with --profile option ([#47](https://github.com/AnswerDotAI/fastship/issues/47))
+
+
 ## 0.1.7
 
 ### New Features
