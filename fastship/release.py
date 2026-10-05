@@ -421,15 +421,6 @@ def _replace_toml_section_key(p:Path, section:str, key:str, val:str):
     _write_lines(p, lines)
 
 
-def _maturin_cmd(command:str, release:bool = False, target:str = None, outdir:str = None, args:str = "") -> str:
-    parts = ["maturin", command]
-    if release: parts.append("--release")
-    if target: parts += ["--target", _q(target)]
-    if outdir: parts += ["-o", _q(outdir)]
-    if args: parts.append(args)
-    return " ".join(parts)
-
-
 def _is_maturin_project(data:dict) -> bool:
     build_backend = nested_idx(data, "build-system", "build-backend") or ""
     return "maturin" in build_backend or bool(nested_idx(data, "tool", "maturin"))
@@ -850,15 +841,19 @@ def ship_rs_init(
 
 @call_parse
 def ship_rs_build(
-    release: bool = True,  # Build release wheels by default
+    profile: str = "release", # Cargo build profile
     target: str = None,    # Optional Rust target triple
     outdir: str = "dist",  # Wheel output directory
-    args: str = "",        # Extra arguments appended to `maturin build`
+    args: str = "",        # Extra arguments passed to maturin's build backend
 ):
-    "Build wheels with maturin."
+    r"Build a wheel through the project's configured PEP 517 backend."
     cfg = get_rs_config()
     os.chdir(cfg.root)
-    run(_maturin_cmd("build", release=release, target=target, outdir=outdir, args=args))
+    options = ['--profile', _q(profile)]
+    if target: options += ['--target', _q(target)]
+    if args: options.append(args)
+    config = _q('maturin.build-args=' + ' '.join(options))
+    run(f'{_q(sys.executable)} -m build --wheel --outdir {_q(outdir)} -C {config}')
 
 
 @call_parse

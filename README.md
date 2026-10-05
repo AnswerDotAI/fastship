@@ -123,12 +123,14 @@ Commands:
 ```bash
 ship-rs-new my-project  # create a new maturin/PyO3 project
 ship-rs-init            # configure an existing maturin/PyO3 project
-ship-rs-build            # maturin build --release -o dist
+ship-rs-build            # build a release wheel through the configured backend
 ship-bump                # bump Cargo.toml version, then refresh the local editable install
 ship-release             # tag, publish via CI, then bump
 ```
 
 `ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, and exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module.
+
+`ship-rs-build` uses `python -m build --wheel` with the backend in `[build-system]`. Its default Cargo profile is `release`; use `--profile dist` or `--profile dev` to select another. Projects using `fastws.build_backend` stage their native binaries automatically. Direct `maturin-action` builds bypass that backend and still need explicit staging.
 
 Generated CI runs the tests, then builds wheels with `maturin-action` across an OS matrix (`manylinux: auto` on Linux) and publishes to GitHub Releases and PyPI on `v*` tags. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
 
