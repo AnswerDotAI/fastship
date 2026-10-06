@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.1.9
+
+### New Features
+
+- Bump last version part by default for 4+ part versions; only delegate to nbdev when version lives in `__init__`.py, not static project.version ([#48](https://github.com/AnswerDotAI/fastship/issues/48))
+
+
 ## 0.1.8
 
 ### New Features
