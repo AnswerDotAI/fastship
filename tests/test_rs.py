@@ -52,7 +52,7 @@ def test_ship_bump_routes_to_cargo_when_cargo_toml_present(tmp_path, monkeypatch
 
 
 def test_ship_bump_uses_static_project_version_when_present(tmp_path, monkeypatch):
-    pyproj = '[project]\nname = "myproj"\nversion = "0.1.2"\n'
+    pyproj = '[project]\nname = "myproj"\nversion = "0.1.2"\n\n[tool.nbdev]\nlib_path = "myproj"\n'
     (tmp_path / "pyproject.toml").write_text(pyproj, encoding="utf-8")
     pkg = tmp_path / "myproj"
     pkg.mkdir()

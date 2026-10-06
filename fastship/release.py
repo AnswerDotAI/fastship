@@ -386,17 +386,16 @@ def _bump(old:str, write, version_files:list[Path] = (), part:int = None, unbump
 
 
 def bump_version(version: str, part: int = None, unbump: bool = False) -> str:
-    "Bump `.postN` by default when present, otherwise one release part."
+    "Bump `.postN` by default when present, otherwise the last release part (at least patch)."
     v = Version(version)
     amount = -1 if unbump else 1
     if part is None and v.post is not None: return f"{'.'.join(map(str, v.release))}.post{max(0, v.post + amount)}"
-    if part is None: part = 2
-    if part not in (0, 1, 2): raise ValueError("part must be 0, 1, or 2")
     rel = list(v.release)
     while len(rel) < 3: rel.append(0)
-    rel = rel[:3]
+    if part is None: part = len(rel) - 1
+    if not 0 <= part < len(rel): raise ValueError(f"part must be between 0 and {len(rel) - 1}")
     rel[part] = max(0, rel[part] + amount)
-    for i in range(part + 1, 3): rel[i] = 0
+    for i in range(part + 1, len(rel)): rel[i] = 0
     return ".".join(map(str, rel))
 
 
@@ -643,18 +642,19 @@ class Release:
 
 
 def _nbdev_release():
-    "Return the `nbdev.release` module when the nearest project is an nbdev Python project, else None. nbdev-docs-over-maturin repos get None, because the tag flow releases them."
+    "Return `nbdev.release` for nbdev Python projects whose version lives in `__init__.py`."
     ftype, pyproj = _find_project()
     if ftype != "py": return None
     data = _load_toml(pyproj)
-    if nested_idx(data, "tool", "nbdev") is None or _project_type(pyproj.parent, data) != "python" or _gh_only(pyproj.parent, data): return None
+    if nested_idx(data, "project", "version") is not None or nested_idx(data, "tool", "nbdev") is None: return None
+    if _project_type(pyproj.parent, data) != "python" or _gh_only(pyproj.parent, data): return None
     import nbdev.release
     return nbdev.release
 
 
 @call_parse
 def ship_bump(
-    part: int = None,  # Release part to bump; defaults to post when present, otherwise patch
+    part: int = None,  # Release part to bump; defaults to post when present, otherwise the last part (at least patch)
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
     "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust (pure crates skip the reinstall); package.json for npm; else `__init__.py`."

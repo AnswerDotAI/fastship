@@ -11,9 +11,13 @@ def test_post_version_bumps():
     assert relmod.bump_version("0.0.2026082005.post1") == "0.0.2026082005.post2"
     assert relmod.bump_version("0.0.2026082005.post2", unbump=True) == "0.0.2026082005.post1"
     assert relmod.bump_version("0.0.2026082005.post1", part=2) == "0.0.2026082006"
+    assert relmod.bump_version("9.7.1.1") == "9.7.1.2"
+    assert relmod.bump_version("9.7.1.2", unbump=True) == "9.7.1.1"
+    assert relmod.bump_version("9.7.1.1", part=1) == "9.8.0.0"
 
 
-def test_plain_python_tag_release(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("version,next_version", [("0.0.2026082005.post1", "0.0.2026082005.post2"), ("9.7.1.1", "9.7.1.2")])
+def test_plain_python_tag_release(tmp_path, monkeypatch, capsys, version, next_version):
     pyproject = '''[project]
 name = "xmojo"
 version = "0.0.2026082005.post1"
@@ -25,14 +29,19 @@ package-dir = {"" = "python"}
 branch = "main"
 release = "tag"
 version-files = ["bazel/versions.bzl"]
+
+[tool.nbdev]
+lib_path = "python/xmojo"
+put_version_in_init = false
 '''
+    pyproject = pyproject.replace("0.0.2026082005.post1", version)
     (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
     package = tmp_path / "python/xmojo"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
     versions = tmp_path / "bazel/versions.bzl"
     versions.parent.mkdir()
-    versions.write_text('XMOJO_VERSION="0.0.2026082005.post1"\n', encoding="utf-8")
+    versions.write_text(f'XMOJO_VERSION="{version}"\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(relmod, "_git_has_changes", lambda: False)
     monkeypatch.setattr(relmod, "Release", lambda **kwargs: (_ for _ in ()).throw(AssertionError("local release used")))
@@ -42,15 +51,15 @@ version-files = ["bazel/versions.bzl"]
     asyncio.run(relmod.ship_release())
 
     assert calls == [
-        "git tag -a v0.0.2026082005.post1 -m v0.0.2026082005.post1",
+        f"git tag -a v{version} -m v{version}",
         "git push origin main",
-        "git push origin v0.0.2026082005.post1",
+        f"git push origin v{version}",
         relmod._BUMP_COMMIT,
         "git push"]
-    assert 'version = "0.0.2026082005.post2"' in (tmp_path / "pyproject.toml").read_text()
-    assert versions.read_text() == 'XMOJO_VERSION="0.0.2026082005.post2"\n'
+    assert f'version = "{next_version}"' in (tmp_path / "pyproject.toml").read_text()
+    assert versions.read_text() == f'XMOJO_VERSION="{next_version}"\n'
     assert (package / "__init__.py").read_text() == ""
-    assert "Release started: v0.0.2026082005.post1" in capsys.readouterr().out
+    assert f"Release started: v{version}" in capsys.readouterr().out
 
 
 def test_version_files_are_validated_before_writing(tmp_path):

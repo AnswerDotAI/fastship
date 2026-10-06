@@ -4,7 +4,7 @@ Tiny, local-first release tools for modern Python projects.
 
 `fastship` gives you the same *workflow feel* as the nbdev `nbdev-bump-version`, `release-pypi`, and `release-gh` commands — but for plain (non-notebook) Python projects.
 
-In an nbdev project (one with `[tool.nbdev]` in `pyproject.toml`), `ship-bump`, `ship-pypi`, `ship-changelog`, and `ship-gh` automatically delegate to their nbdev equivalents, so you can use the same commands in every repo.
+In an nbdev project (one with `[tool.nbdev]` in `pyproject.toml`), `ship-bump`, `ship-pypi`, `ship-changelog`, and `ship-gh` delegate to their nbdev equivalents when the version comes from `__init__.py`. Projects with a static `[project].version` use fastship's Python flow.
 
 ## Install
 
@@ -28,7 +28,7 @@ This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, R
 
 ### `ship-bump`
 
-Bump a version part (0=major, 1=minor, 2=patch). For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps `[package].version` in `Cargo.toml` and runs `maturin develop`; otherwise it rewrites a static `[project].version` when present, or `__version__` in your package `__init__.py`:
+Bump a version part counted from the left (0=major, 1=minor, 2=patch). The default increments the last part, with at least three parts: `9.7.1.1` becomes `9.7.1.2`. For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps `[package].version` in `Cargo.toml` and runs `maturin develop`; otherwise it rewrites a static `[project].version` when present, or `__version__` in your package `__init__.py`:
 
 ```bash
 ship-bump --part 2
