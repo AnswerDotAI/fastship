@@ -657,7 +657,7 @@ def ship_bump(
     part: int = None,  # Release part to bump; defaults to post when present, otherwise the last part (at least patch)
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
-    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml (then `maturin develop`) for Rust (pure crates skip the reinstall); package.json for npm; else `__init__.py`."
+    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml for Rust; package.json for npm; else `__init__.py`."
     if (nbr := _nbdev_release()): return nbr.nbdev_bump_version(part=part, unbump=unbump)
     ftype, pyproj = _find_project()
     if ftype == "npm": _npm_bump(part=part, unbump=unbump)
@@ -868,11 +868,9 @@ def ship_zig_build(
 
 
 def ship_rs_bump(part: int = 2, unbump: bool = False):
-    "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited), then refresh the local editable install."
+    "Bump the version in Cargo.toml (`[package]`, or `[workspace.package]` when inherited)."
     cfg = get_rs_config()
     _cargo_bump(cfg, part=part, unbump=unbump)
-    os.chdir(cfg.root)
-    run("maturin develop")
 
 
 

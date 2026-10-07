@@ -28,7 +28,7 @@ This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, R
 
 ### `ship-bump`
 
-Bump a version part counted from the left (0=major, 1=minor, 2=patch). The default increments the last part, with at least three parts: `9.7.1.1` becomes `9.7.1.2`. For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps `[package].version` in `Cargo.toml` and runs `maturin develop`; otherwise it rewrites a static `[project].version` when present, or `__version__` in your package `__init__.py`:
+Bump a version part counted from the left (0=major, 1=minor, 2=patch). The default increments the last part, with at least three parts: `9.7.1.1` becomes `9.7.1.2`. For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps the version in `Cargo.toml` without rebuilding; otherwise it rewrites a static `[project].version` when present, or `__version__` in your package `__init__.py`:
 
 ```bash
 ship-bump --part 2
@@ -124,7 +124,7 @@ Commands:
 ship-rs-new my-project  # create a new maturin/PyO3 project
 ship-rs-init            # configure an existing maturin/PyO3 project
 ship-rs-build            # build a release wheel through the configured backend
-ship-bump                # bump Cargo.toml version, then refresh the local editable install
+ship-bump                # bump Cargo.toml version without rebuilding
 ship-release             # tag, publish via CI, then bump
 ```
 
