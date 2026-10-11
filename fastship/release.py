@@ -1099,6 +1099,9 @@ name = "{pkg_name}"
 
 [dependencies]
 
+[profile.test]
+inherits = "release"
+
 [profile.release]
 lto = false
 codegen-units = 16
@@ -1182,7 +1185,7 @@ def _template_rs_dev(test:str, build:str)->str:
         "Commands": _bash(test, build),
         "Layout": "The root package is a pure Rust crate, published to crates.io. Rust users who depend on it never build PyO3. The Python extension is the `py` package. It depends on the root crate, is never published, and maturin builds it through `[tool.maturin].manifest-path`.",
         "Versioning": 'The canonical version lives in `[workspace.package]` in `Cargo.toml`, which both crates inherit. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.',
-        "Build profiles": "uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. CI builds distributed wheels with `dist`, which enables full LTO and one codegen unit, disables incremental compilation, and strips the result.",
+        "Build profiles": "uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. `cargo test` and `cargo develop` build the `test` profile, which inherits `release`. CI builds distributed wheels with `dist`, which enables full LTO and one codegen unit, disables incremental compilation, and strips the result.",
         "Release": f"1. Run `{test}`.\n2. Confirm the release version in `Cargo.toml` (`[workspace.package].version`).\n3. Run `ship-release`.\n\n{_TAG_RELEASE}"})
 
 def _template_rs_workflow(proj_name:str)->str:
@@ -1403,7 +1406,7 @@ def ship_rs_new(
         "tests/test_basic.py": _template_rs_test(pkg),
         "README.md": _template_rs_readme(proj, test, build),
         "DEV.md": _template_rs_dev(test, build),
-        ".github/workflows/ci.yml": _template_rs_workflow(proj)}, force)
+        ".github/workflows/ci.yml": _template_rs_workflow(proj)}, force, site=False)
     return _created(root, _PIP_DEV, test)
 
 
