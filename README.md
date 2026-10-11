@@ -108,6 +108,8 @@ maturin develop
 pytest -q
 ```
 
+The project is a Cargo workspace. Other Rust crates can depend on its root package, a pure Rust crate, without building PyO3. maturin builds the Python extension from the `py` member through `[tool.maturin].manifest-path`. The `py` member is never published. Both crates share the version in `[workspace.package]`.
+
 Use `Cargo.toml` as the version source:
 
 ```toml
@@ -128,13 +130,13 @@ ship-bump                # bump Cargo.toml version without rebuilding
 ship-release             # tag, publish via CI, then bump
 ```
 
-`ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, and exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module.
+`ship-rs-init` must be run from an existing maturin project with `Cargo.toml`. It sets `[project].dynamic = ["version"]`, removes `[project].version`, and exposes `__version__` from `CARGO_PKG_VERSION` when it finds the PyO3 module in the crate that `[tool.maturin].manifest-path` names.
 
 `ship-rs-build` uses `python -m build --wheel` with the backend in `[build-system]`. Its default Cargo profile is `release`; use `--profile dist` or `--profile dev` to select another. Projects using `fastws.build_backend` stage their native binaries automatically. Direct `maturin-action` builds bypass that backend and still need explicit staging.
 
-Generated CI runs the tests, then builds wheels with `maturin-action` across an OS matrix (`manylinux: auto` on Linux) and publishes to GitHub Releases and PyPI on `v*` tags. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
+Generated CI runs the Rust and Python tests, then builds wheels with `maturin-action` across an OS matrix (`manylinux: auto` on Linux). On `v*` tags it publishes the crate to crates.io, then the wheels and sdist to GitHub Releases and PyPI. Publish the first crates.io release by hand with `cargo publish` and a token, then add the repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
 
-Generated projects use `.git/fastws-cargo-key` as their uv Cargo dependency cache key, avoiding rebuilds when Cargo rewrites a lockfile without changing its contents. Their release profile—used by uv builds and `maturin develop --release`—uses package-specific incremental compilation with no LTO and 16 codegen units for fast editable rebuilds while dependencies remain sccacheable. CI builds distributed wheels with the separate `dist` profile: full LTO, one codegen unit, no incremental compilation, and stripping.
+Generated projects list only `pyproject.toml` and the two `Cargo.toml` files in `tool.uv.cache-keys`. uv rebuilds the extension only when packaging changes. `maturin develop`, or `cargo develop` in a fastws workspace, rebuilds after Rust source changes. Their release profile—used by uv builds and `maturin develop --release`—uses package-specific incremental compilation with no LTO and 16 codegen units for fast editable rebuilds while dependencies remain sccacheable. CI builds distributed wheels with the separate `dist` profile: full LTO, one codegen unit, no incremental compilation, and stripping.
 
 ### Zig-backed projects
 

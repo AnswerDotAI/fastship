@@ -514,14 +514,14 @@ def _warn(msg:str): print(f"ship-rs-init: warning: {msg}", file=sys.stderr)
 
 
 def _ensure_rs_runtime_version(root:Path, data:dict):
-    "Expose Cargo.toml's version as `__version__` in the PyO3 module."
+    "Expose Cargo.toml's version as `__version__` in the PyO3 module, in the crate that `[tool.maturin].manifest-path` names."
     mod = _rs_module_name(data)
     if not mod:
         _warn("could not infer PyO3 module name; skipped Rust __version__ export")
         return
     pat = re.compile(rf"^\s*fn\s+{re.escape(mod)}\s*\(\s*(\w+)\s*:", re.MULTILINE)
     found = False
-    for p in (root / "src").rglob("*.rs"):
+    for p in (root / Path(nested_idx(data, "tool", "maturin", "manifest-path") or "Cargo.toml").parent / "src").rglob("*.rs"):
         txt = p.read_text(encoding="utf-8")
         m = pat.search(txt)
         if not m: continue
@@ -979,9 +979,12 @@ def _setuptools_tables(pkg:str) -> list[str]:
     "Return `[tool.setuptools]` tables that package only `pkg` and read the version from `pkg.__version__`."
     return ['[tool.setuptools.dynamic]\nversion = { attr = "%s.__version__" }' % pkg, f'[tool.setuptools.packages.find]\ninclude = ["{pkg}"]']
 
-def _cargo_package(proj:str, desc:str, gh_org:str) -> str:
-    "`[package]` table of a scaffolded `Cargo.toml`."
-    return "\n".join(["[package]", f'name = "{proj}"', f'version = "{_NEW_VERSION}"', 'edition = "2024"', f'license = "{_LICENSE}"',
+_RS_EDITION = "2024"
+
+def _cargo_package(proj:str, desc:str, gh_org:str, inherit:bool = False) -> str:
+    "`[package]` table of a scaffolded `Cargo.toml`. With `inherit`, the version and edition come from `[workspace.package]`."
+    version, edition = ("version.workspace = true", "edition.workspace = true") if inherit else (f'version = "{_NEW_VERSION}"', f'edition = "{_RS_EDITION}"')
+    return "\n".join(["[package]", f'name = "{proj}"', version, edition, f'license = "{_LICENSE}"',
         f'description = "{desc}"', f'repository = "{_gh_url(gh_org, proj)}"'])
 
 _WORKFLOW = """name: CI
@@ -1023,6 +1026,20 @@ def _workflow(jobs:str, needs:str, publish:str = _PYPI_PUBLISH) -> str:
     "CI workflow that runs `jobs` on pushes and pull requests, then on `v*` tags runs the `publish` steps after the `needs` jobs. `jobs` and `publish` name actions by their `_ACTIONS` keys."
     return _WORKFLOW % dict(jobs=jobs % _ACTIONS, needs=needs, publish=publish % _ACTIONS)
 
+_CRATES_FIRST = ("For the first release, publish manually with a token (`cargo publish`), then add this repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. "
+    "Later tags publish through CI without a token.")
+
+def _crates_publish(pkg:str = None) -> str:
+    "Publish steps that push a crate to crates.io through trusted publishing. `pkg` names the workspace package to publish, when the workspace has several."
+    return """      - uses: %(checkout)s
+      - uses: %(rust)s
+      - id: auth
+        uses: %(crates_auth)s
+      - run: cargo publish""" + (f" -p {pkg}" if pkg else "") + """
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+"""
+
 _RS_HELLO = """pub fn hello(name: &str) -> String {
     format!("Hello, {name}!")
 }
@@ -1059,24 +1076,37 @@ Cargo.lock
 def _template_manifest(*extra:str)->str: return "\n".join(["include README.md", "include LICENSE", *extra]) + "\n"
 
 def _template_rs_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
-    maturin = f'[tool.maturin]\nfeatures = ["extension-module"]\npython-source = "python"\nmodule-name = "{pkg_name}._core"'
-    uv = '[tool.uv]\ncache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = ".git/fastws-cargo-key" }]'
+    maturin = f'[tool.maturin]\nmanifest-path = "py/Cargo.toml"\npython-source = "python"\nmodule-name = "{pkg_name}._core"'
+    uv = '[tool.uv]\ncache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "py/Cargo.toml" }]'
     classifiers = ["Programming Language :: Rust", "Programming Language :: Python :: Implementation :: CPython"]
     return _pyproject(proj_name, desc, gh_org, classifiers, _RS_DEV_DEPS, [maturin, uv, '[tool.pytest.ini_options]\ntestpaths = ["tests"]'],
         requires=[_MATURIN_REQ], backend="maturin", license='{text = "%s"}' % _LICENSE)
 
 def _template_cargo_toml(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
-    return _cargo_package(proj_name, desc, gh_org) + f"""
+    "The root `Cargo.toml`. Its own package is the pure Rust crate. Its `py` member is the Python extension."
+    return f"""[workspace]
+members = ["py"]
+default-members = [".", "py"]
+
+[workspace.package]
+version = "{_NEW_VERSION}"
+edition = "{_RS_EDITION}"
+
+{_cargo_package(proj_name, desc, gh_org, inherit=True)}
 
 [lib]
 name = "{pkg_name}"
-crate-type = ["cdylib", "rlib"]
+
+[dependencies]
 
 [profile.release]
 lto = false
 codegen-units = 16
 
 [profile.release.package.{proj_name}]
+incremental = true
+
+[profile.release.package.{proj_name}-py]
 incremental = true
 
 [profile.dist]
@@ -1089,28 +1119,45 @@ strip = true
 [profile.dist.package.{proj_name}]
 incremental = false
 
-[dependencies]
-pyo3 = ">=0.28"
-
-[features]
-extension-module = ["pyo3/extension-module"]
+[profile.dist.package.{proj_name}-py]
+incremental = false
 """
 
-def _template_rs_lib()->str:
-    return _RS_HELLO + """
-use pyo3::prelude::*;
+def _template_py_cargo_toml(proj_name:str)->str:
+    "The `py/Cargo.toml` of the Python extension. It depends on the root crate and is never published."
+    return f"""[package]
+name = "{proj_name}-py"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+test = false
+
+[dependencies]
+{proj_name} = {{ path = ".." }}
+pyo3 = {{ version = ">=0.29", features = ["extension-module"] }}
+
+[build-dependencies]
+pyo3-build-config = ">=0.29"
+"""
+
+def _template_rs_lib(pkg_name:str)->str:
+    "The `py/src/lib.rs` of the Python extension. It wraps the root crate's functions as a Python module."
+    return f"""use pyo3::prelude::*;
 
 #[pyfunction(name = "hello")]
-fn py_hello(name: &str) -> String {
-    hello(name)
-}
+fn py_hello(name: &str) -> String {{
+    {pkg_name}::hello(name)
+}}
 
 #[pymodule]
-fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {{
     m.add_function(wrap_pyfunction!(py_hello, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
-}
+}}
 """
 
 def _template_rs_init()->str:
@@ -1127,17 +1174,18 @@ def test_hello():
 """
 
 def _template_rs_readme(proj_name:str, test:str, build:str)->str:
-    return _tag_readme(proj_name, "PyO3/maturin package scaffolded by fastship.", test,
-        "The workflow builds the wheels and sdist and publishes them to GitHub and PyPI.", build=build)
+    return _tag_readme(proj_name, "PyO3/maturin package scaffolded by fastship. The Rust crate is in `src/`, and its Python extension in `py/`.", test,
+        "On a version tag, the workflow builds the wheels and sdist, then publishes the crate to crates.io and the wheels and sdist to GitHub and PyPI. " + _CRATES_FIRST, build=build)
 
 def _template_rs_dev(test:str, build:str)->str:
     return _md("Development", "", {
         "Commands": _bash(test, build),
-        "Versioning": 'The canonical version lives in `Cargo.toml`. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.',
+        "Layout": "The root package is a pure Rust crate, published to crates.io. Rust users who depend on it never build PyO3. The Python extension is the `py` package. It depends on the root crate, is never published, and maturin builds it through `[tool.maturin].manifest-path`.",
+        "Versioning": 'The canonical version lives in `[workspace.package]` in `Cargo.toml`, which both crates inherit. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.',
         "Build profiles": "uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. CI builds distributed wheels with `dist`, which enables full LTO and one codegen unit, disables incremental compilation, and strips the result.",
-        "Release": f"1. Run `{test}`.\n2. Confirm the release version in `Cargo.toml` (`[package].version`).\n3. Run `ship-release`.\n\n{_TAG_RELEASE}"})
+        "Release": f"1. Run `{test}`.\n2. Confirm the release version in `Cargo.toml` (`[workspace.package].version`).\n3. Run `ship-release`.\n\n{_TAG_RELEASE}"})
 
-def _template_rs_workflow()->str:
+def _template_rs_workflow(proj_name:str)->str:
     return _workflow("""  test:
     runs-on: ubuntu-latest
     steps:
@@ -1146,6 +1194,7 @@ def _template_rs_workflow()->str:
       - uses: %(setup_python)s
         with:
           python-version: '3.12'
+      - run: cargo test
       - run: pip install -e '.[dev]'
       - run: pytest -q
 
@@ -1153,7 +1202,7 @@ def _template_rs_workflow()->str:
     needs: test
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: %(checkout)s
@@ -1178,7 +1227,7 @@ def _template_rs_workflow()->str:
         with:
           name: wheels-sdist
           path: dist
-""", "[build, sdist]")
+""", "[build, sdist]", _crates_publish(proj_name) + _PYPI_PUBLISH)
 
 def _template_zig_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return _pyproject(proj_name, desc, gh_org, _PY_CLASSIFIERS, ["fastship", "build", "cibuildwheel~=3.4", _ZIG_REQ, "pytest"],
@@ -1340,18 +1389,21 @@ def ship_rs_new(
     gh_org: str = _GH_ORG,  # GitHub organization for project.urls
     force: bool = False,    # Overwrite if the folder already exists
 ):
-    "Create a maturin/PyO3 project wired for fastship Rust commands."
+    "Create a maturin/PyO3 project wired for fastship Rust commands. Its root crate is pure Rust, and its Python extension is the `py/` crate."
     proj, pkg = _names(name, package)
     test, build = "maturin develop && pytest -q", "ship-rs-build"
     root = _scaffold(Path(path)/proj, {
         "pyproject.toml": _template_rs_pyproject(proj, pkg, description, gh_org),
         "Cargo.toml": _template_cargo_toml(proj, pkg, description, gh_org),
-        "src/lib.rs": _template_rs_lib(),
+        "src/lib.rs": _template_crate_lib(),
+        "py/Cargo.toml": _template_py_cargo_toml(proj),
+        "py/build.rs": "fn main() { pyo3_build_config::add_extension_module_link_args(); }\n",
+        "py/src/lib.rs": _template_rs_lib(pkg),
         f"python/{pkg}/__init__.py": _template_rs_init(),
         "tests/test_basic.py": _template_rs_test(pkg),
         "README.md": _template_rs_readme(proj, test, build),
         "DEV.md": _template_rs_dev(test, build),
-        ".github/workflows/ci.yml": _template_rs_workflow()}, force)
+        ".github/workflows/ci.yml": _template_rs_workflow(proj)}, force)
     return _created(root, _PIP_DEV, test)
 
 
@@ -1369,9 +1421,7 @@ mod tests {
 """
 
 def _template_crate_readme(proj_name:str, desc:str, test:str)->str:
-    return _tag_readme(proj_name, desc, test, "The workflow publishes the crate to crates.io and creates the GitHub release. "
-        "For the first release, publish manually with a token (`cargo publish`), then add this repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. "
-        "Later tags publish through CI without a token.", setup=())
+    return _tag_readme(proj_name, desc, test, "The workflow publishes the crate to crates.io and creates the GitHub release. " + _CRATES_FIRST, setup=())
 
 def _template_crate_workflow()->str:
     return _workflow("""  test:
@@ -1380,14 +1430,7 @@ def _template_crate_workflow()->str:
       - uses: %(checkout)s
       - uses: %(rust)s
       - run: cargo test
-""", "test", """      - uses: %(checkout)s
-      - uses: %(rust)s
-      - id: auth
-        uses: %(crates_auth)s
-      - run: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-      - uses: %(gh_release)s
+""", "test", _crates_publish() + """      - uses: %(gh_release)s
         with:
           generate_release_notes: true
 """)
