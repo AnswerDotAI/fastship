@@ -20,10 +20,9 @@ from packaging.version import Version
 from fastcore.all import *  # Path, nested_idx, ifnone, parallel, run, repo_details, call_parse, ...
 from fastgit import Git
 from ghapi.core import *    # GhApi, APIError, ...
+import nbdev.release
 
 GH_HOST = "https://api.github.com"
-CHANGELOG_MARKER = "<!-- do not remove -->\n"
-_NEW_CHANGELOG = f"# Release notes\n\n{CHANGELOG_MARKER}"
 
 DEFAULT_LABEL_GROUPS = dict(breaking="Breaking Changes", enhancement="New Features", bug="Bugs Squashed")
 
@@ -170,6 +169,7 @@ def _get_token(root: Path = None) -> str | None:
 
 def _gh_api(owner:str = None, repo:str = None, token:str = None, root:Path = None) -> GhApi:
     "Return a `GhApi` for `owner`/`repo`, authenticated with `token`, else `_get_token(root)`. Without `owner`, `_parse_repo` reads the owner from `repo` or from the git origin in `root`."
+    if root: root = root.expanduser()
     if not owner: owner, repo = _parse_repo(repo, root)
     if not owner or not repo: raise CliError("Could not infer GitHub owner/repo. Pass --repo OWNER/REPO or set a git remote `origin`.")
     token = token or _get_token(root)
@@ -563,74 +563,17 @@ def _ensure_py_runtime_version(root:Path, data:dict):
 # GitHub release notes (changelog from issues) + release creation
 # ---------------------------------------------------------------------------
 
-def _issue_txt(issue):
-    res = f"- {issue.title.strip()} ([#{issue.number}]({issue.html_url}))"
-    if hasattr(issue, "pull_request"): res += f", thanks to [@{issue.user.login}]({issue.user.html_url})"
-    return res
-
-
-def _issues_txt(iss, label):
-    if not iss: return ""
-    res = f"### {label}\n\n"
-    return res + "\n".join(map(_issue_txt, iss))
-
-
-class Release:
+class Release(nbdev.release.Release):
+    "nbdev's `Release`, configured from `ShipConfig` instead of nbdev's settings, and releasing to the configured branch."
     def __init__(self, owner=None, repo=None, token=None, cfg: ShipConfig | None = None, **groups):
-        "Create CHANGELOG.md from closed GitHub issues and publish GitHub releases."
         self.cfg = cfg or get_config()
         self.changefile = self.cfg.changelog_file
         self.groups = groups or self.cfg.label_groups
         os.chdir(self.cfg.root)
         self.gh = _gh_api(owner, repo, token, self.cfg.root)
 
-    async def _issues(self, label):
-        return await self.gh.issues.list_for_repo(state="closed", sort="created", filter="all", since=self.commit_date, labels=label)
-
-    async def changelog(self, debug: bool = False):
-        """Create or update CHANGELOG.md from closed and labeled GitHub issues.
-
-        Issues are pulled since the latest GitHub release's `published_at`.
-        If no releases exist, all matching issues are included.
-        """
-        if not self.changefile.exists(): self.changefile.write_text(_NEW_CHANGELOG, encoding="utf-8")
-
-        try:
-            lr = await self.gh.repos.get_latest_release()
-            self.commit_date = lr.published_at
-        except APIError as e:
-            if e.status_code != 404: raise
-            lr, self.commit_date = None, "2000-01-01T00:00:00Z"
-
-        if lr and (Version(self.cfg.version) <= Version(lr.tag_name)):
-            raise CliError(f"Version bump required: expected: >{lr.tag_name}, got: {self.cfg.version}.")
-
-        res = f"\n## {self.cfg.version}\n\n"
-        issues = await parallel_async(self._issues, self.groups.keys())
-        res += "\n\n".join(issues.map_zipwith(_issues_txt, self.groups.values()).filter())
-
-        if debug: return res
-
-        txt = self.changefile.read_text(encoding="utf-8")
-        if CHANGELOG_MARKER not in txt:
-            raise ValueError(
-                f"{self.changefile} is missing the fastship changelog marker "
-                f"{CHANGELOG_MARKER.strip()!r}. Add it near the top of the file.")
-        from nbdev.release import update_changelog
-        txt = update_changelog(txt, self.cfg.version, res, CHANGELOG_MARKER)
-        self.changefile.write_text(txt, encoding="utf-8")
-        run(f"git add {self.changefile}")
-        return self
-
-    def latest_notes(self) -> str:
-        "Latest CHANGELOG entry (the most recent `## <version>` section)."
-        if not self.changefile.exists(): return ""
-        its = re.split(r"^## ", self.changefile.read_text(encoding="utf-8"), flags=re.MULTILINE)
-        if len(its) <= 1: return ""
-        return "\n".join(its[1].splitlines()[1:]).strip()
-
     async def release(self):
-        "Tag and create a release in GitHub for the current version."
+        "Tag and create a release in GitHub for the current version, on `cfg.branch`."
         notes = dict(generate_release_notes=True) if self.cfg.gh_only else dict(body=self.latest_notes())
         await self.gh.create_release(self.cfg.version, branch=self.cfg.branch, **notes)
         return self
@@ -648,7 +591,6 @@ def _nbdev_release():
     data = _load_toml(pyproj)
     if nested_idx(data, "project", "version") is not None or nested_idx(data, "tool", "nbdev") is None: return None
     if _project_type(pyproj.parent, data) != "python" or _gh_only(pyproj.parent, data): return None
-    import nbdev.release
     return nbdev.release
 
 
@@ -736,7 +678,9 @@ async def ship_changelog(
 ):
     "Create/update CHANGELOG.md from closed GitHub issues (without opening editor or releasing)."
     if (nbr := _nbdev_release()): return await nbr.changelog(repo=repo, token=token)
-    print(f"Updated {(await Release(repo=repo, token=token).changelog()).changefile}")
+    rel = Release(repo=repo, token=token)
+    await rel.changelog()
+    print(f"Updated {rel.changefile}")
 
 
 @call_parse
@@ -1471,7 +1415,7 @@ def ship_new(
     root = _scaffold(Path(path)/proj, {
         "pyproject.toml": _template_pyproject(proj, pkg, description, gh_org),
         "README.md": _template_readme(proj, pkg),
-        "CHANGELOG.md": _NEW_CHANGELOG,
+        "CHANGELOG.md": nbdev.release.CHANGELOG_TMPL,
         "MANIFEST.in": _template_manifest("include CHANGELOG.md"),
         f"{pkg}/__init__.py": f'__version__ = "{_NEW_VERSION}"\n'}, force)
     return _created(root, _PIP_DEV)
