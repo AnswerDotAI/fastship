@@ -2,6 +2,14 @@
 
 <!-- do not remove -->
 
+## 0.1.10
+
+### New Features
+
+- Subclass nbdev.release.Release for changelog generation, drop duplicated changelog code, expand root path ([#50](https://github.com/AnswerDotAI/fastship/issues/50))
+- Split ship-rs-new scaffold into pure Rust root crate and py/ PyO3 workspace member; publish crate to crates.io in CI; add arm64 Linux wheels ([#49](https://github.com/AnswerDotAI/fastship/issues/49))
+
+
 ## 0.1.9
 
 ### New Features
