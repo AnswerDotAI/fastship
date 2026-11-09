@@ -1452,7 +1452,7 @@ async def ship_pr(
 
     try: has_commits = bool(g.log(f'origin/{default}..HEAD', oneline=True).strip())
     except Exception: has_commits = False
-    has_changes = bool(g.status(porcelain=True))
+    has_changes = bool(g.status(porcelain=True, untracked_files='no'))
     if not has_commits and not has_changes: raise CliError("Nothing to PR: no unpushed commits and no uncommitted changes")
 
     slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')[:50]
