@@ -1146,7 +1146,6 @@ def _template_rs_workflow(proj_name:str)->str:
       - run: pytest -q
 
   build:
-    needs: test
     strategy:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
@@ -1174,7 +1173,7 @@ def _template_rs_workflow(proj_name:str)->str:
         with:
           name: wheels-sdist
           path: dist
-""", "[build, sdist]", _crates_publish(proj_name) + _PYPI_PUBLISH)
+""", "[test, build, sdist]", _crates_publish(proj_name) + _PYPI_PUBLISH)
 
 def _template_zig_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return _pyproject(proj_name, desc, gh_org, _PY_CLASSIFIERS, ["fastship", "build", "cibuildwheel~=3.4", _ZIG_REQ, "pytest"],
