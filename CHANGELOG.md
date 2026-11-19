@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.1.11
+
+### New Features
+
+- Bump version uniformly for all Python projects then export nbdev notebooks; use nbdev `lib_path`; validate version-files before tag releases ([#51](https://github.com/AnswerDotAI/fastship/issues/51))
+
+
 ## 0.1.10
 
 ### New Features
