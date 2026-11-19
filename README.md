@@ -4,7 +4,7 @@ Tiny, local-first release tools for modern Python projects.
 
 `fastship` gives you the same *workflow feel* as the nbdev `nbdev-bump-version`, `release-pypi`, and `release-gh` commands — but for plain (non-notebook) Python projects.
 
-In an nbdev project (one with `[tool.nbdev]` in `pyproject.toml`), `ship-bump`, `ship-pypi`, `ship-changelog`, and `ship-gh` delegate to their nbdev equivalents when the version comes from `__init__.py`. Projects with a static `[project].version` use fastship's Python flow.
+`ship-bump` uses the same version bumping and synchronization for every Python project. In an nbdev project (one with `[tool.nbdev]` in `pyproject.toml`) whose version comes from `__init__.py`, it then exports the notebooks; `ship-pypi`, `ship-changelog`, and `ship-gh` delegate to their nbdev equivalents. Projects with a static `[project].version` use fastship's Python flow.
 
 ## Install
 
@@ -257,7 +257,7 @@ release = "tag"
 version-files = ["bazel/versions.bzl"]
 ```
 
-Each file must contain the old version exactly once; fastship validates every file before changing any of them.
+Each file must contain the old version exactly once; fastship validates every file before changing any of them. Tag-driven releases also validate these copies before pushing the release tag.
 
 The final `Released` message is printed only after the full local publishing workflow succeeds. Tag-driven native releases print `Release started` because CI owns publication.
 

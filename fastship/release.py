@@ -92,7 +92,10 @@ def _pkg_bases(root:Path, data:dict)->list[Path]:
 
 
 def _find_pkg_path(root: Path, data: dict) -> Path:
-    "Find the package directory. A `[tool.fastship].package` is searched for recursively. Without one, use the package named after `[project].name`, else the first package folder."
+    "Find the package directory from nbdev's `lib_path`, `[tool.fastship].package`, the project name, or the first package folder."
+    if nested_idx(data, "tool", "nbdev") is not None:
+        pkg_path = nbdev.config.get_config(root).lib_path
+        if (pkg_path/_init).exists(): return pkg_path
     bases = [o for o in _pkg_bases(root, data) if o.exists()]
     def top_level(pkg): return (b/pkg for b in bases if (b/pkg/_init).exists())
     if pkg := _ship_cfg(data).get("package"):
@@ -372,13 +375,19 @@ def _write_config_version(cfg:ShipConfig, version:str):
     else: _write_version(cfg.init_file, version)
 
 
+def _version_copies(old:str, version_files:list[Path]) -> dict[Path, str]:
+    "Read synchronized copies, validating every file before any version is changed."
+    copies = {p: p.read_text(encoding="utf-8") for p in version_files}
+    for p, text in copies.items():
+        if text.count(old) != 1: raise ValueError(f"Expected exactly one {old!r} in {p}")
+    return copies
+
+
 def _bump(old:str, write, version_files:list[Path] = (), part:int = None, unbump:bool = False) -> str:
     "Bump `old`, write the new version with `write`, and replace `old` in each of `version_files`, printing both versions. If a version file does not hold `old` exactly once, raise `ValueError` before writing anything."
     print(f"Old version: {old}")
     new = bump_version(old, part=part, unbump=unbump)
-    copies = {p: p.read_text(encoding="utf-8") for p in version_files}
-    for p, text in copies.items():
-        if text.count(old) != 1: raise ValueError(f"Expected exactly one {old!r} in {p}")
+    copies = _version_copies(old, version_files)
     write(new)
     for p, text in copies.items(): p.write_text(text.replace(old, new), encoding="utf-8")
     print(f"New version: {new}")
@@ -599,8 +608,7 @@ def ship_bump(
     part: int = None,  # Release part to bump; defaults to post when present, otherwise the last part (at least patch)
     unbump: bool = False,  # Reduce version instead of increasing it
 ):
-    "Bump version: nbdev projects delegate to `nbdev-bump-version`; Cargo.toml for Rust; package.json for npm; else `__init__.py`."
-    if (nbr := _nbdev_release()): return nbr.nbdev_bump_version(part=part, unbump=unbump)
+    "Bump Cargo.toml for Rust, package.json for npm, or the Python version source; export nbdev notebooks afterward."
     ftype, pyproj = _find_project()
     if ftype == "npm": _npm_bump(part=part, unbump=unbump)
     elif ftype == "crate": _cargo_bump(get_crate_config(), part=part, unbump=unbump)
@@ -608,6 +616,7 @@ def ship_bump(
     else:
         cfg = get_config()
         _bump(cfg.version, partial(_write_config_version, cfg), cfg.version_files, part, unbump)
+        if (nbr := _nbdev_release()): nbr.nbdev_export(path=None)
 
 
 def _clean_dist(root: Path):
@@ -715,6 +724,7 @@ def _bump_and_push():
 def _ship_tag_release(kind:str):
     "Tag `v<version>` and push branch + tag (CI builds, publishes, and writes release notes), then bump."
     cfg = dict(crate=get_crate_config, rust=get_rs_config, npm=get_npm_config).get(kind, get_config)()
+    _version_copies(cfg.version, getattr(cfg, "version_files", ()))
     os.chdir(cfg.root)
     if _git_has_changes(): raise CliError("Uncommitted changes: commit or stash before releasing")
     version, tag = cfg.version, f"v{cfg.version}"

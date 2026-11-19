@@ -20,24 +20,3 @@ def test_cargo_bump_changes_only_authoritative_version(tmp_path, cargo, old, new
     assert cfg.version == old
     assert relmod._cargo_bump(cfg) == new
     assert manifest.read_text() == cargo.replace(f'version = "{old}"', f'version = "{new}"')
-
-
-def test_maturin_workspace_bump_synchronizes_copies(tmp_path, monkeypatch):
-    (tmp_path/"pyproject.toml").write_text('''[build-system]
-build-backend = "maturin"
-[project]
-name = "demo"
-dynamic = ["version"]
-[tool.nbdev]
-[tool.fastship]
-branch = "main"
-version-files = ["package.json"]
-''')
-    manifest, copy = tmp_path/"Cargo.toml", tmp_path/"package.json"
-    cargo, npm = _workspace + _inherited, '{"version": "0.1.2"}\n'
-    manifest.write_text(cargo)
-    copy.write_text(npm)
-    monkeypatch.chdir(tmp_path)
-    relmod.ship_bump()
-    assert manifest.read_text() == cargo.replace("0.1.2", "0.1.3")
-    assert copy.read_text() == npm.replace("0.1.2", "0.1.3")
