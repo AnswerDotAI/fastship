@@ -841,7 +841,7 @@ _TAG_RELEASE = "`ship-release` pushes a `v<version>` tag, which starts the relea
 _ACTIONS = dict(checkout="actions/checkout@v7", setup_python="actions/setup-python@v7", rust="dtolnay/rust-toolchain@stable",
     maturin="PyO3/maturin-action@v1", cibuildwheel="pypa/cibuildwheel@v4.2.0", upload="actions/upload-artifact@v7",
     download="actions/download-artifact@v8", gh_release="softprops/action-gh-release@v3", pypi="pypa/gh-action-pypi-publish@release/v1",
-    crates_auth="rust-lang/crates-io-auth-action@v1")
+    crates_auth="rust-lang/crates-io-auth-action@v1", sccache="AnswerDotAI/.github/actions/sccache@main")
 
 def _slug(name:str, sep:str = "_", lower:bool = False) -> str:
     "Slugify `name`, replacing each run of characters other than ASCII letters and digits with `sep`. An empty slug becomes `pkg`. A slug that starts with a digit gets a `pkg` prefix."
@@ -1148,6 +1148,9 @@ def _template_rs_workflow(proj_name:str)->str:
     steps:
       - uses: %(checkout)s
       - uses: %(rust)s
+      - uses: %(sccache)s
+        with:
+          r2-url: ${{ secrets.SCCACHE_R2 }}
       - uses: %(setup_python)s
         with:
           python-version: '3.12'
@@ -1162,6 +1165,10 @@ def _template_rs_workflow(proj_name:str)->str:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: %(checkout)s
+      - if: runner.os != 'Linux'
+        uses: %(sccache)s
+        with:
+          r2-url: ${{ secrets.SCCACHE_R2 }}
       - uses: %(maturin)s
         with:
           args: --profile dist --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
@@ -1385,6 +1392,9 @@ def _template_crate_workflow()->str:
     steps:
       - uses: %(checkout)s
       - uses: %(rust)s
+      - uses: %(sccache)s
+        with:
+          r2-url: ${{ secrets.SCCACHE_R2 }}
       - run: cargo test
 """, "test", _crates_publish() + """      - uses: %(gh_release)s
         with:
