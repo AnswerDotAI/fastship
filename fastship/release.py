@@ -8,7 +8,7 @@ and create GitHub releases directly via `ghapi` (no GitHub Actions required).
 
 __all__ = ["GH_HOST", "DEFAULT_LABEL_GROUPS", "ShipConfig", "RustConfig", "NpmConfig", "get_config", "get_rs_config", "get_npm_config", "bump_version", "Release",
     "ship_bump", "ship_pages", "ship_pypi", "ship_changelog", "ship_release_gh", "ship_release", "ship_new", "ship_pr",
-    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_zig_new", "ship_zig_build"]
+    "ship_rs_new", "ship_rs_init", "ship_rs_build", "ship_rs_bump", "ship_npm_init", "ship_zig_new", "ship_zig_build"]
 
 import os, re, sys, json, shutil, subprocess, ast, importlib.resources, shlex
 from dataclasses import dataclass, field
@@ -794,6 +794,43 @@ def ship_rs_init(
 
 
 @call_parse
+def ship_npm_init(
+    branch: str = None,   # Branch for [tool.fastship] (defaults to existing/current)
+    force: bool = False,  # Overwrite an existing .github/workflows/ci.yml
+):
+    "Configure an existing Python+npm or npm-only project for tag-triggered OIDC releases via GitHub Actions."
+    ftype, marker = _find_project()
+    root = marker.parent
+    pkg_json = root/"package.json"
+    if not pkg_json.exists(): raise CliError(f"Missing {pkg_json}")
+    pkg = _load_json(pkg_json)
+    if not pkg.get("name") or not pkg.get("version"): raise CliError(f"{pkg_json} must define name and version")
+    wf = root/".github/workflows/ci.yml"
+    if wf.exists() and not force: raise CliError(f"{wf} already exists (use --force to overwrite)")
+    is_py = ftype == "py"
+    if is_py:
+        data = _load_toml(marker)
+        kind = _project_type(root, data)
+        if kind != "python": raise CliError(f"{marker} is a {kind} project; ship-npm-init supports Python+npm and npm-only projects")
+        cfg = get_config(root)
+        if cfg.gh_only: raise CliError(f"{marker} has no Python package to publish")
+        if pkg["version"] != cfg.version:
+            _write_npm_version(pkg_json, cfg.version)
+            print(f"Synced {pkg_json} version: {pkg['version']} -> {cfg.version}")
+        ship = _ship_cfg(data)
+        vf = list(ship.get("version-files") or [])
+        if "package.json" not in vf: vf.append("package.json")
+        _ensure_toml_section(marker, "tool.fastship", {"branch": branch or _branch(ship), "release": "tag", "version-files": vf}, replace=True)
+        print(f"Updated {marker}")
+    has_build = bool((pkg.get("scripts") or {}).get("build"))
+    has_deps = bool(pkg.get("dependencies") or pkg.get("devDependencies"))
+    _write(wf, _template_npm_workflow(py=is_py, has_build=has_build, has_deps=has_deps))
+    print(f"Wrote {wf}")
+    return wf
+
+
+
+@call_parse
 def ship_rs_build(
     profile: str = "release", # Cargo build profile
     target: str = None,    # Optional Rust target triple
@@ -838,10 +875,14 @@ _SETUPTOOLS_REQ = "setuptools>=77"
 _PIP_DEV = "pip install -e .[dev]"
 _PY_CLASSIFIERS = ["Programming Language :: Python :: 3", "Programming Language :: Python :: 3 :: Only"]
 _TAG_RELEASE = "`ship-release` pushes a `v<version>` tag, which starts the release workflow in GitHub Actions, then bumps the version."
-_ACTIONS = dict(checkout="actions/checkout@v7", setup_python="actions/setup-python@v7", rust="dtolnay/rust-toolchain@stable",
-    maturin="PyO3/maturin-action@v1", cibuildwheel="pypa/cibuildwheel@v4.2.0", upload="actions/upload-artifact@v7",
-    download="actions/download-artifact@v8", gh_release="softprops/action-gh-release@v3", pypi="pypa/gh-action-pypi-publish@release/v1",
-    crates_auth="rust-lang/crates-io-auth-action@v1", sccache="AnswerDotAI/.github/actions/sccache@main")
+_PY_VERSION = "3.13"
+_NODE_VERSION = "lts/*"
+_ACTIONS = dict(checkout="actions/checkout@v7", setup_python="actions/setup-python@v7", setup_node="actions/setup-node@v7",
+    rust="dtolnay/rust-toolchain@stable", maturin="PyO3/maturin-action@v1", cibuildwheel="pypa/cibuildwheel@v4.2.0",
+    upload="actions/upload-artifact@v7", download="actions/download-artifact@v8", gh_release="softprops/action-gh-release@v3",
+    pypi="pypa/gh-action-pypi-publish@release/v1", crates_auth="rust-lang/crates-io-auth-action@v1",
+    sccache="AnswerDotAI/.github/actions/sccache@main")
+_WORKFLOW_VARS = dict(_ACTIONS, py_version=_PY_VERSION, node_version=_NODE_VERSION)
 
 def _slug(name:str, sep:str = "_", lower:bool = False) -> str:
     "Slugify `name`, replacing each run of characters other than ASCII letters and digits with `sep`. An empty slug becomes `pkg`. A slug that starts with a digit gets a `pkg` prefix."
@@ -978,7 +1019,7 @@ _PYPI_PUBLISH = """      - uses: %(download)s
 
 def _workflow(jobs:str, needs:str, publish:str = _PYPI_PUBLISH) -> str:
     "CI workflow that runs `jobs` on pushes and pull requests, then on `v*` tags runs the `publish` steps after the `needs` jobs. `jobs` and `publish` name actions by their `_ACTIONS` keys."
-    return _WORKFLOW % dict(jobs=jobs % _ACTIONS, needs=needs, publish=publish % _ACTIONS)
+    return _WORKFLOW % dict(jobs=jobs % _WORKFLOW_VARS, needs=needs, publish=publish % _WORKFLOW_VARS)
 
 _CRATES_FIRST = ("For the first release, publish manually with a token (`cargo publish`), then add this repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. "
     "Later tags publish through CI without a token.")
@@ -992,6 +1033,38 @@ def _crates_publish(pkg:str = None) -> str:
       - run: cargo publish""" + (f" -p {pkg}" if pkg else "") + """
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+"""
+
+
+def _template_npm_workflow(py:bool = True, has_build:bool = False, has_deps:bool = False) -> str:
+    "Tag-triggered OIDC release workflow for npm (and optionally PyPI) publishing."
+    steps = ["      - uses: %(checkout)s"]
+    if py: steps.append("      - uses: %(setup_python)s\n        with:\n          python-version: '%(py_version)s'")
+    steps.append("      - uses: %(setup_node)s\n        with:\n          node-version: '%(node_version)s'\n          registry-url: https://registry.npmjs.org")
+    if py: steps.append("      - run: pip install -e '.[dev]' build" if has_build else "      - run: pip install build")
+    if has_build and has_deps: steps.append("      - run: npm install")
+    if has_build: steps.append("      - run: npm run build")
+    if py: steps.append("      - run: python -m build")
+    steps.append("      - run: npm publish")
+    if py: steps.append("      - uses: %(pypi)s")
+    gh_with = "\n          files: dist/*" if py else ""
+    steps.append(f"      - uses: %(gh_release)s\n        with:{gh_with}\n          generate_release_notes: true")
+    body = "\n".join(steps) % _WORKFLOW_VARS
+    return f"""name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+{body}
 """
 
 _RS_HELLO = """pub fn hello(name: &str) -> String {
@@ -1153,7 +1226,7 @@ def _template_rs_workflow(proj_name:str)->str:
           r2-url: ${{ secrets.SCCACHE_R2 }}
       - uses: %(setup_python)s
         with:
-          python-version: '3.12'
+          python-version: '%(py_version)s'
       - run: cargo test
       - run: pip install -e '.[dev]'
       - run: pytest -q

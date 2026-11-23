@@ -161,6 +161,17 @@ ship-release             # tag, publish via CI, then bump
 
 The generated workflow builds one Python-ABI-independent wheel for Linux x86_64, Linux ARM64, macOS Intel, and macOS Apple Silicon. Tagged builds create the GitHub release and publish to PyPI with trusted publishing.
 
+### Python + npm and npm-only projects
+
+Configure an existing Python+npm or npm-only repository for tag-triggered OIDC releases via GitHub Actions:
+
+```bash
+ship-npm-init             # write .github/workflows/ci.yml and configure [tool.fastship]
+ship-release              # tag, publish via CI, then bump
+```
+
+For Python+npm projects, `ship-npm-init` sets `release = "tag"`, appends `"package.json"` to `[tool.fastship].version-files`, syncs `package.json`'s version to the Python version, and generates `.github/workflows/ci.yml` (using Node `lts/*` and Python `3.13`, running `npm run build` when `scripts.build` is defined) to publish to npm, PyPI, and GitHub Releases. Pass `--force` to overwrite an existing workflow. For the first npm release, publish manually (`npm publish`), then configure Trusted Publishing on npm (and PyPI) for `ci.yml`.
+
 ### `ship-pr`
 
 Create a PR from uncommitted or unpushed work, merge it immediately, and clean up:
