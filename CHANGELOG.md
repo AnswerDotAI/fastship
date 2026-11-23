@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.1.12
+
+### New Features
+
+- Add ship-npm-init command to configure tag-triggered OIDC release workflows for Python+npm and npm-only projects ([#52](https://github.com/AnswerDotAI/fastship/issues/52))
+
+
 ## 0.1.11
 
 ### New Features
