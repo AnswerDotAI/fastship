@@ -881,7 +881,7 @@ _ACTIONS = dict(checkout="actions/checkout@v7", setup_python="actions/setup-pyth
     rust="dtolnay/rust-toolchain@stable", maturin="PyO3/maturin-action@v1", cibuildwheel="pypa/cibuildwheel@v4.2.0",
     upload="actions/upload-artifact@v7", download="actions/download-artifact@v8", gh_release="softprops/action-gh-release@v3",
     pypi="pypa/gh-action-pypi-publish@release/v1", crates_auth="rust-lang/crates-io-auth-action@v1",
-    sccache="AnswerDotAI/.github/actions/sccache@main")
+    setup_uv="AnswerDotAI/.github/actions/setup-uv@main", sccache="AnswerDotAI/.github/actions/sccache@main")
 _WORKFLOW_VARS = dict(_ACTIONS, py_version=_PY_VERSION, node_version=_NODE_VERSION)
 
 def _slug(name:str, sep:str = "_", lower:bool = False) -> str:
@@ -951,6 +951,7 @@ def _pyproject(
     backend:str = "setuptools.build_meta", # Build backend
     license:str = None, # TOML value for `[project].license`, defaulting to the SPDX expression `_LICENSE`
     ship:dict = None, # `[tool.fastship]` keys besides `branch = "main"`
+    extras:dict = None, # Additional `[project.optional-dependencies]` entries alongside `dev`
 ) -> str:
     "Text of a scaffolded `pyproject.toml`."
     url = _gh_url(gh_org, proj)
@@ -966,7 +967,7 @@ license = {license or _fmt_toml_val(_LICENSE)}
 authors = [{_authors_toml(proj)}]
 classifiers = {_fmt_toml_val(classifiers)}
 dependencies = {_fmt_toml_val(deps)}""",
-        f"[project.optional-dependencies]\ndev = {_fmt_toml_val(dev)}",
+        "[project.optional-dependencies]\n" + "\n".join(f"{k} = {_fmt_toml_val(v)}" for k, v in ({**(extras or {}), "dev": dev}).items()),
         f'[project.urls]\nHomepage = "{url}"\nRepository = "{url}"\nIssues = "{url}/issues"',
         f"[tool.fastship]\n{fastship}", *tool]) + "\n"
 
@@ -1106,7 +1107,8 @@ def _template_rs_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->s
     maturin = f'[tool.maturin]\nmanifest-path = "py/Cargo.toml"\npython-source = "python"\nmodule-name = "{pkg_name}._core"'
     uv = '[tool.uv]\ncache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "py/Cargo.toml" }]'
     classifiers = ["Programming Language :: Rust", "Programming Language :: Python :: Implementation :: CPython"]
-    return _pyproject(proj_name, desc, gh_org, classifiers, _RS_DEV_DEPS, [maturin, uv, '[tool.pytest.ini_options]\ntestpaths = ["tests"]'],
+    return _pyproject(proj_name, desc, gh_org, classifiers, ["fastship>=0.0.11", _MATURIN_REQ, f"{proj_name}[test]"],
+        [maturin, uv, '[tool.pytest.ini_options]\ntestpaths = ["tests"]'], extras=dict(test=["pytest"]),
         requires=[_MATURIN_REQ], backend="maturin", license='{text = "%s"}' % _LICENSE)
 
 def _template_cargo_toml(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
@@ -1141,9 +1143,8 @@ incremental = true
 
 [profile.dist]
 inherits = "release"
-lto = true
+lto = "thin"
 incremental = false
-codegen-units = 1
 strip = true
 
 [profile.dist.package.{proj_name}]
@@ -1167,7 +1168,7 @@ test = false
 
 [dependencies]
 {proj_name} = {{ path = ".." }}
-pyo3 = {{ version = ">=0.29", features = ["extension-module"] }}
+pyo3 = {{ version = ">=0.29", features = ["extension-module", "abi3-py310"] }}
 
 [build-dependencies]
 pyo3-build-config = ">=0.29"
@@ -1212,7 +1213,7 @@ def _template_rs_dev(test:str, build:str)->str:
         "Commands": _bash(test, build),
         "Layout": "The root package is a pure Rust crate, published to crates.io. Rust users who depend on it never build PyO3. The Python extension is the `py` package. It depends on the root crate, is never published, and maturin builds it through `[tool.maturin].manifest-path`.",
         "Versioning": 'The canonical version lives in `[workspace.package]` in `Cargo.toml`, which both crates inherit. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.',
-        "Build profiles": "uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. `cargo test` and `cargo develop` build the `test` profile, which inherits `release`. CI builds distributed wheels with `dist`, which enables full LTO and one codegen unit, disables incremental compilation, and strips the result.",
+        "Build profiles": "uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. `cargo test` and `cargo develop` build the `test` profile, which inherits `release`. CI builds distributed wheels with `dist`, which enables thin LTO, disables incremental compilation, and strips the result.",
         "Release": f"1. Run `{test}`.\n2. Confirm the release version in `Cargo.toml` (`[workspace.package].version`).\n3. Run `ship-release`.\n\n{_TAG_RELEASE}"})
 
 def _template_rs_workflow(proj_name:str)->str:
@@ -1224,11 +1225,12 @@ def _template_rs_workflow(proj_name:str)->str:
       - uses: %(sccache)s
         with:
           r2-url: ${{ secrets.SCCACHE_R2 }}
+      - uses: %(setup_uv)s
       - uses: %(setup_python)s
         with:
           python-version: '%(py_version)s'
       - run: cargo test
-      - run: pip install -e '.[dev]'
+      - run: uv pip install --system -e '.[test]'
       - run: pytest -q
 
   build:
@@ -1238,14 +1240,17 @@ def _template_rs_workflow(proj_name:str)->str:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: %(checkout)s
-      - if: runner.os != 'Linux'
-        uses: %(sccache)s
+      - uses: %(rust)s
+      - uses: %(sccache)s
         with:
           r2-url: ${{ secrets.SCCACHE_R2 }}
+      - uses: %(setup_python)s
+        with:
+          python-version: '%(py_version)s'
       - uses: %(maturin)s
         with:
-          args: --profile dist --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
-          manylinux: auto
+          args: --profile dist --out dist ${{ runner.os == 'Linux' && '--zig' || '' }}
+          manylinux: '2_31'
       - uses: %(upload)s
         with:
           name: wheels-${{ matrix.os }}
