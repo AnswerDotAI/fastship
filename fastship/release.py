@@ -32,8 +32,9 @@ _init = "__init__.py"
 _NEW_VERSION = "0.1.0"
 _GH_ORG = "AnswerDotAI"
 _ZIG_REQ = "ziglang==0.16.0"
-_MATURIN_REQ = "maturin>=1.0,<2.0"
-_RS_DEV_DEPS = ["fastship>=0.0.11", _MATURIN_REQ, "pytest"]
+_MATURIN_REQ = "maturin>=1.13,<2.0"
+_FASTWS_REQ = "fastws-cli>=0.0.42"
+_RS_DEV_DEPS = ["fastship>=0.0.11", _MATURIN_REQ, _FASTWS_REQ, "pytest"]
 _BUMP_COMMIT = 'git commit -am "bump [skip ci]"'
 
 _re_version_any = re.compile(r"^__version__\s*=.*$", re.MULTILINE)
@@ -878,7 +879,7 @@ _TAG_RELEASE = "`ship-release` pushes a `v<version>` tag, which starts the relea
 _PY_VERSION = "3.13"
 _NODE_VERSION = "lts/*"
 _ACTIONS = dict(checkout="actions/checkout@v7", setup_python="actions/setup-python@v7", setup_node="actions/setup-node@v7",
-    rust="dtolnay/rust-toolchain@stable", maturin="PyO3/maturin-action@v1", cibuildwheel="pypa/cibuildwheel@v4.2.0",
+    rust="dtolnay/rust-toolchain@stable", maturin="AnswerDotAI/.github/actions/maturin-build@main", cibuildwheel="pypa/cibuildwheel@v4.2.0",
     upload="actions/upload-artifact@v7", download="actions/download-artifact@v8", gh_release="softprops/action-gh-release@v3",
     pypi="pypa/gh-action-pypi-publish@release/v1", crates_auth="rust-lang/crates-io-auth-action@v1",
     setup_uv="AnswerDotAI/.github/actions/setup-uv@main", sccache="AnswerDotAI/.github/actions/sccache@main")
@@ -1108,8 +1109,8 @@ def _template_rs_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->s
     uv = '[tool.uv]\ncache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "py/Cargo.toml" }]'
     classifiers = ["Programming Language :: Rust", "Programming Language :: Python :: Implementation :: CPython"]
     return _pyproject(proj_name, desc, gh_org, classifiers, ["fastship>=0.0.11", _MATURIN_REQ, f"{proj_name}[test]"],
-        [maturin, uv, '[tool.pytest.ini_options]\ntestpaths = ["tests"]'], extras=dict(test=["pytest"]),
-        requires=[_MATURIN_REQ], backend="maturin", license='{text = "%s"}' % _LICENSE)
+        [maturin, uv, '[tool.pytest.ini_options]\ntestpaths = ["tests"]'], extras=dict(test=[_FASTWS_REQ, "pytest"]),
+        requires=[_MATURIN_REQ, _FASTWS_REQ], backend="fastws.build_backend", license='{text = "%s"}' % _LICENSE)
 
 def _template_cargo_toml(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     "The root `Cargo.toml`. Its own package is the pure Rust crate. Its `py` member is the Python extension."
@@ -1125,6 +1126,8 @@ edition = "{_RS_EDITION}"
 
 [lib]
 name = "{pkg_name}"
+test = false
+doctest = false
 
 [dependencies]
 
@@ -1165,6 +1168,7 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 test = false
+doctest = false
 
 [dependencies]
 {proj_name} = {{ path = ".." }}
@@ -1204,6 +1208,14 @@ def test_hello():
     assert hello("fastship") == "Hello, fastship!"
 """
 
+
+def _template_rs_rust_test(pkg_name:str)->str:
+    return f"""#[test]
+fn hello_works() {{
+    assert_eq!({pkg_name}::hello("fastship"), "Hello, fastship!");
+}}
+"""
+
 def _template_rs_readme(proj_name:str, test:str, build:str)->str:
     return _tag_readme(proj_name, "PyO3/maturin package scaffolded by fastship. The Rust crate is in `src/`, and its Python extension in `py/`.", test,
         "On a version tag, the workflow builds the wheels and sdist, then publishes the crate to crates.io and the wheels and sdist to GitHub and PyPI. " + _CRATES_FIRST, build=build)
@@ -1213,7 +1225,7 @@ def _template_rs_dev(test:str, build:str)->str:
         "Commands": _bash(test, build),
         "Layout": "The root package is a pure Rust crate, published to crates.io. Rust users who depend on it never build PyO3. The Python extension is the `py` package. It depends on the root crate, is never published, and maturin builds it through `[tool.maturin].manifest-path`.",
         "Versioning": 'The canonical version lives in `[workspace.package]` in `Cargo.toml`, which both crates inherit. `pyproject.toml` gets the Python package version from Cargo via `dynamic = ["version"]`.',
-        "Build profiles": "uv builds and `maturin develop --release` use the incremental `release` profile for fast local iteration. `cargo test` and `cargo develop` build the `test` profile, which inherits `release`. CI builds distributed wheels with `dist`, which enables thin LTO, disables incremental compilation, and strips the result.",
+        "Build profiles": "uv builds, `cargo develop`, and `cargo test --release` share the incremental `release` profile (`lto = false`, 16 codegen units) for fast local iteration. CI builds distributed wheels with `dist`, which enables thin LTO, disables incremental compilation, and strips the result.",
         "Release": f"1. Run `{test}`.\n2. Confirm the release version in `Cargo.toml` (`[workspace.package].version`).\n3. Run `ship-release`.\n\n{_TAG_RELEASE}"})
 
 def _template_rs_workflow(proj_name:str)->str:
@@ -1229,8 +1241,9 @@ def _template_rs_workflow(proj_name:str)->str:
       - uses: %(setup_python)s
         with:
           python-version: '%(py_version)s'
-      - run: cargo test
-      - run: uv pip install --system -e '.[test]'
+      - run: cargo test --release
+      - run: uv pip install --system --config-settings-package __PROJ__:metadata-only=1 -e '.[test]'
+      - run: cargo develop
       - run: pytest -q
 
   build:
@@ -1268,7 +1281,7 @@ def _template_rs_workflow(proj_name:str)->str:
         with:
           name: wheels-sdist
           path: dist
-""", "[test, build, sdist]", _crates_publish(proj_name) + _PYPI_PUBLISH)
+""".replace("__PROJ__", proj_name), "[test, build, sdist]", _crates_publish(proj_name) + _PYPI_PUBLISH)
 
 def _template_zig_pyproject(proj_name:str, pkg_name:str, desc:str, gh_org:str)->str:
     return _pyproject(proj_name, desc, gh_org, _PY_CLASSIFIERS, ["fastship", "build", "cibuildwheel~=3.4", _ZIG_REQ, "pytest"],
@@ -1432,16 +1445,17 @@ def ship_rs_new(
 ):
     "Create a maturin/PyO3 project wired for fastship Rust commands. Its root crate is pure Rust, and its Python extension is the `py/` crate."
     proj, pkg = _names(name, package)
-    test, build = "maturin develop && pytest -q", "ship-rs-build"
+    test, build = "cargo test --release && cargo develop && pytest -q", "ship-rs-build"
     root = _scaffold(Path(path)/proj, {
         "pyproject.toml": _template_rs_pyproject(proj, pkg, description, gh_org),
         "Cargo.toml": _template_cargo_toml(proj, pkg, description, gh_org),
-        "src/lib.rs": _template_crate_lib(),
+        "src/lib.rs": _RS_HELLO,
         "py/Cargo.toml": _template_py_cargo_toml(proj),
         "py/build.rs": "fn main() { pyo3_build_config::add_extension_module_link_args(); }\n",
         "py/src/lib.rs": _template_rs_lib(pkg),
         f"python/{pkg}/__init__.py": _template_rs_init(),
         "tests/test_basic.py": _template_rs_test(pkg),
+        "tests/hello.rs": _template_rs_rust_test(pkg),
         "README.md": _template_rs_readme(proj, test, build),
         "DEV.md": _template_rs_dev(test, build),
         ".github/workflows/ci.yml": _template_rs_workflow(proj)}, force, site=False)
