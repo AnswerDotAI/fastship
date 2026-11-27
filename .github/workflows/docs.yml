@@ -24,5 +24,5 @@ jobs:
       - id: docs
         uses: AnswerDotAI/workflows/fastship-docs@master
         with:
-          fastship: '-e .[docs]'
+          fastship: '-e .[all]'
           install: ''
