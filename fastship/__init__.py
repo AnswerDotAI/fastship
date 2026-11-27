@@ -4,7 +4,7 @@ Provides project scaffolding, version bumps, changelogs, and releases for plain 
 
 See README.md for setup.
 """
-__version__ = "0.1.13"
+__version__ = "0.1.14"
 
 
 
