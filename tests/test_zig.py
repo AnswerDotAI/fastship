@@ -1,7 +1,6 @@
 import runpy, subprocess, sys
 
-import pytest
-import fastship.release as relmod
+import pytest, fastship.release as relmod
 
 
 def test_zig_scaffold_builds_loadable_library(tmp_path):

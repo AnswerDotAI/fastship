@@ -9,7 +9,9 @@ Tiny, local-first release tools for modern Python projects.
 ## Install
 
 ```bash
-pip install fastship
+pip install 'fastship[all]'      # full CLI (release, docs, scaffolding)
+pip install 'fastship[docs]'     # docs generation only (ship-docs, ship-llms)
+pip install fastship             # minimal core (ship-bump)
 ```
 
 ## Quick start
@@ -22,13 +24,13 @@ cd my-project
 pip install -e .[dev]
 ```
 
-This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, README, and everything wired for fastship. Author metadata comes from Git's `user.name` and `user.email`. New projects also include fastship's Jekyll `_config.yml` and `_layouts/default.html`.
+This creates a complete project with `pyproject.toml`, `__version__`, LICENSE, README, `.github/workflows/docs.yml`, and everything wired for fastship. Author metadata comes from Git's `user.name` and `user.email`.
 
 ## Commands
 
 ### `ship-bump`
 
-Bump a version part counted from the left (0=major, 1=minor, 2=patch). The default increments the last part, with at least three parts: `9.7.1.1` becomes `9.7.1.2`. For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps the version in `Cargo.toml` without rebuilding; otherwise it rewrites a static `[project].version` when present, or `__version__` in your package `__init__.py`:
+Bump a semver part (`X.Y.Z`, counted from the left: 0=major, 1=minor, 2=patch). The default increments patch (or `.postN` when present). For Rust projects (a `Cargo.toml` next to `pyproject.toml`) it bumps the version in `Cargo.toml` without rebuilding; otherwise it rewrites a static `[project].version` when present, or `__version__` in your package `__init__.py`:
 
 ```bash
 ship-bump --part 2
@@ -84,15 +86,36 @@ For a permanently wheel-only project:
 wheel-only = true
 ```
 
+### `ship-docs`
+
+Build a pure-Markdown Quarto documentation site (HTML + `.html.md` + `llms.txt`, zero Jupyter) from `README.md`, optional `docs/*.md`, code docstrings/docments, and `pkg/skill.py`:
+
+```bash
+ship-docs                # render site to _docs/
+ship-docs --preview      # live preview with quarto
+```
+
+Add extra pages as `.md` or `.qmd` files under `docs/`. Set numeric `order:` in YAML frontmatter to place pages ahead of alphabetically sorted pages.
+
 ### `ship-pages`
 
-Enable GitHub Pages from the repository's `main` branch and set the repository homepage to the Pages URL:
+Add `.github/workflows/docs.yml` (calling `AnswerDotAI/workflows/fastship-docs@master`), remove legacy Jekyll files if present, set `[project.urls].Documentation`, enable GitHub Pages Actions (`build_type="workflow"`), and set the repository homepage to the Pages URL:
 
 ```bash
 ship-pages
 ```
 
 Run this after creating the GitHub repository and making its first push. The repository is inferred from the local `origin` remote, and authentication uses the same token lookup as `ship-gh`.
+
+### `ship-llms`
+
+Generate repo-root `llms.txt` from `pkg/skill.py` via `pyskills.llms`:
+
+```bash
+ship-llms
+```
+
+When `.github/workflows/docs.yml` is present, `llms.txt` links directly to the published `.html.md` API pages (leaving a single root `llms.txt` with no `llms-*.txt` clutter). Projects with `[tool.nbdev]` are skipped because `nbdev-export` manages `nbs/llms.txt`. Hand-written `llms.txt` files without a generator marker are never overwritten.
 
 ### PyO3 / maturin projects
 
@@ -134,7 +157,7 @@ ship-release             # tag, publish via CI, then bump
 
 `ship-rs-build` uses `python -m build --wheel` with the backend in `[build-system]`. Its default Cargo profile is `release`; use `--profile dist` or `--profile dev` to select another. Projects using `fastws.build_backend` stage their native binaries automatically. Direct `maturin` builds bypass that backend and still need explicit staging.
 
-Generated CI runs the Rust and Python tests in parallel with wheel builds using `AnswerDotAI/.github/actions/maturin-build@main` across an OS matrix (`manylinux: '2_31'` with `--zig` and shared R2 `sccache` on Linux). On `v*` tags, after tests and distribution builds succeed, it publishes the crate to crates.io, then the wheels and sdist to GitHub Releases and PyPI. Publish the first crates.io release by hand with `cargo publish` and a token, then add the repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
+Generated CI runs the Rust and Python tests in parallel with wheel builds using `AnswerDotAI/workflows/maturin-build@master` across an OS matrix (`manylinux: '2_31'` with `--zig` and shared R2 `sccache` on Linux). On `v*` tags, after tests and distribution builds succeed, it publishes the crate to crates.io, then the wheels and sdist to GitHub Releases and PyPI. Publish the first crates.io release by hand with `cargo publish` and a token, then add the repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. Any CLI tools are Python console scripts declared in `[project.scripts]`; there are no native Rust binaries to build.
 
 Generated projects use `fastws.build_backend` and list only `pyproject.toml` and the two `Cargo.toml` files in `tool.uv.cache-keys`. uv rebuilds the extension only when packaging changes, while `cargo develop` rebuilds after Rust source changes. The `release` profile—shared by `cargo develop`, `cargo test --release`, and CI tests—uses package-specific incremental compilation with no LTO and 16 codegen units so local edits stay fast while dependencies remain sccacheable. CI builds distributed wheels with the `dist` profile: thin LTO, 16 codegen units, no incremental compilation, and stripping.
 
@@ -247,6 +270,7 @@ ship-release        # generate changelog, release, bump version, push
 - Plain Python projects build and check the distribution before creating the GitHub release, upload it to PyPI, then bump.
 - A project with a static `[project].version` and no package to build is released on GitHub only. There is no build, PyPI upload or changelog. GitHub writes the release notes, and the bump updates `pyproject.toml`. A uv workspace root is refused, since it is not a project.
 - Maturin and fastship Zig projects push one annotated version tag for their trusted-publishing workflow, then bump - no changelog step, no prompts, no token needed.
+- When `pkg/skill.py` exists, `ship-release` refreshes `llms.txt` (and `llms-*.txt` companions) before building, releasing, or tagging: `nbs/llms.txt` for nbdev repos (committed as `"update llms"`), and repo-root `llms.txt` for non-nbdev repos (committed as `"update llms [skip ci]"` on tag releases).
 - npm projects (a `package.json` with no `pyproject.toml` anywhere nearer) refuse a dirty tree, push one annotated version tag for their trusted-publishing workflow, then bump `package.json`. Maturin and Zig releases refuse a dirty tree the same way.
 
 Every flow ends with a bump commit whose message contains `[skip ci]`, so pushing it starts no `push`-triggered GitHub Actions workflows, such as CI or docs deployment.

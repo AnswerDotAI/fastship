@@ -1,5 +1,4 @@
-import pytest
-import fastship.release as relmod
+import pytest, fastship.config as cfgmod
 
 _package = '[package]\nname = "demo"\nversion = "9.8.7"\n'
 _inherited = '[package]\nname = "demo"\nversion.workspace = true\n'
@@ -16,7 +15,7 @@ _workspace = '[workspace]\nmembers = []\n[workspace.package]\nversion = "0.1.2"\
 def test_cargo_bump_changes_only_authoritative_version(tmp_path, cargo, old, new):
     manifest = tmp_path/"Cargo.toml"
     manifest.write_text(cargo)
-    cfg = relmod.get_crate_config(tmp_path)
+    cfg = cfgmod.get_crate_config(tmp_path)
     assert cfg.version == old
-    assert relmod._cargo_bump(cfg) == new
+    assert cfgmod.cargo_bump(cfg) == new
     assert manifest.read_text() == cargo.replace(f'version = "{old}"', f'version = "{new}"')

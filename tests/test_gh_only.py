@@ -1,5 +1,4 @@
-import pytest
-import fastship.release as relmod
+import pytest, fastship.release as relmod
 
 _pyproject = '''[project]
 name = "nbdev3-template"

@@ -7,7 +7,7 @@ name = "fastship"
 dynamic = ["version"]
 description = "Local-first Python project scaffolding and release tools"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [{ name = "Jeremy Howard" }]
 keywords = ["release", "pypi", "github", "ghapi", "twine", "versioning"]
@@ -20,28 +20,32 @@ classifiers = [
   "Topic :: Software Development :: Version Control :: Git",
 ]
 
-dependencies = [
-  "fastcore>=2.2.20",
-  "fastgit>=0.0.7",
-  "nbdev>=3.3.26",
-  "ghapi>=2.1.4",
-  "packaging>=23.0",
-  "build>=1.0.0",
-  "twine>=5.0.0",
-  "pyyaml>=6.0",
-  'tomli>=2.0.0; python_version < "3.11"',
-]
+dependencies = ["fastcore>=2.3.1"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+docs = ["pyskills>=0.0.38"]
+release = [
+  "fastship[docs]",
+  "ghapi>=2.1.4",
+  "fastgit>=0.0.7",
+  "build>=1.0.0",
+  "twine>=5.0.0",
+  "nbdev>=3.3.30",
+  "pyyaml>=6.0",
+]
+all = ["fastship[release]"]
+dev = ["fastship[all]", "pytest"]
 
 [project.urls]
 Source = "https://github.com/answerdotai/fastship"
+Documentation = "https://answerdotai.github.io/fastship/"
 
 [project.scripts]
-ship-bump = "fastship.release:ship_bump"
+ship-bump = "fastship.config:ship_bump"
 ship-pypi = "fastship.release:ship_pypi"
 ship-pages = "fastship.release:ship_pages"
+ship-docs = "fastship.docs:ship_docs"
+ship-llms = "fastship.docs:ship_llms"
 ship-changelog = "fastship.release:ship_changelog"
 ship-gh = "fastship.release:ship_release_gh"
 ship-release = "fastship.release:ship_release"
@@ -65,4 +69,4 @@ include-package-data = false
 include = ["fastship"]
 
 [tool.setuptools.package-data]
-fastship = ["_config.yml", "_layouts/*.html", "LICENSE"]
+fastship = ["LICENSE"]
