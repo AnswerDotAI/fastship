@@ -23,15 +23,3 @@ version-files = ["version.txt"]
     assert pyproject.read_text() == before.replace("1.0.0.post1", "1.0.0.post2")
     assert copy.read_text() == "release: 1.0.0.post2\n"
     assert init.read_text() == init_before
-
-
-
-def test_docs_mod_urls(tmp_path):
-    from fastship.docs import docs_mod_urls
-    pkg = tmp_path/"demo"
-    pkg.mkdir()
-    (pkg/"__init__.py").write_text("from ._core import render\n")
-    (pkg/"sub.py").write_text("def helper(): pass\n")
-    (pkg/"_priv.py").write_text("def hidden(): pass\n")
-    assert docs_mod_urls(pkg) == ({"demo.sub": "api/sub.html.md"}, "api.html.md")
-

@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ["fastcore>=2.3.1"]
 
 [project.optional-dependencies]
-docs = ["pyskills>=0.0.38"]
+docs = ["pyskills>=0.0.39"]
 release = [
   "fastship[docs]",
   "ghapi>=2.1.4",
