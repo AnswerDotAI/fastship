@@ -2,6 +2,13 @@
 
 <!-- do not remove -->
 
+## 0.1.13
+
+### New Features
+
+- Add ship-docs and ship-llms, extract config module, switch ship-pages to Actions workflow, and split optional extras ([#53](https://github.com/AnswerDotAI/fastship/issues/53))
+
+
 ## 0.1.12
 
 ### New Features
